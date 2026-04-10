@@ -70,10 +70,10 @@ export function ConversationList({ selectedId, onSelect, refreshKey }: Props) {
   }
 
   const statusColors: Record<string, string> = {
-    open: 'bg-emerald-500',
-    pending: 'bg-amber-500',
-    resolved: 'bg-blue-500',
-    closed: 'bg-slate-500',
+    open: 'bg-[#6bc9a0]',
+    pending: 'bg-[#f0b775]',
+    resolved: 'bg-[#6b9cf7]',
+    closed: 'bg-[#bfb8ae]',
   }
 
   return (
@@ -146,8 +146,8 @@ export function ConversationList({ selectedId, onSelect, refreshKey }: Props) {
                     {conv.contact.name?.[0]?.toUpperCase() || conv.contact.phone.slice(-2)}
                   </div>
                   {conv.aiEnabled && (
-                    <div className="absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full bg-violet-500/20 flex items-center justify-center">
-                      <Bot className="w-2.5 h-2.5 text-violet-400" />
+                    <div className="absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full bg-[#9b8cf5]/15 flex items-center justify-center">
+                      <Bot className="w-2.5 h-2.5 text-[#9b8cf5]" />
                     </div>
                   )}
                 </div>

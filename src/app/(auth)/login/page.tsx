@@ -33,7 +33,7 @@ function LoginForm() {
     })
 
     if (result?.error) {
-      setError('Geçersiz email veya şifre')
+      setError('Gecersiz email veya sifre')
       setLoading(false)
       return
     }
@@ -43,33 +43,35 @@ function LoginForm() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950">
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-indigo-900/20 via-transparent to-transparent" />
+    <div className="min-h-screen flex items-center justify-center bg-[#faf8f5]">
+      {/* Soft decorative blobs */}
+      <div className="absolute top-[-10%] right-[-5%] w-[500px] h-[500px] rounded-full bg-[#e8dff5] opacity-40 blur-3xl" />
+      <div className="absolute bottom-[-10%] left-[-5%] w-[400px] h-[400px] rounded-full bg-[#d4ecf7] opacity-40 blur-3xl" />
 
       <div className="relative w-full max-w-md px-6">
         {/* Logo & Brand */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-indigo-600/20 border border-indigo-500/30 mb-4">
-            <svg className="w-8 h-8 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-[#7c8cf5]/10 border border-[#7c8cf5]/20 mb-4">
+            <svg className="w-8 h-8 text-[#7c8cf5]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
             </svg>
           </div>
-          <h1 className="text-2xl font-bold text-white">WhatsApp AI Platform</h1>
-          <p className="text-slate-400 mt-1">Yönetim paneline giriş yapın</p>
+          <h1 className="text-2xl font-bold text-[#2d2a26]">WhatsApp AI Platform</h1>
+          <p className="text-[#8a8078] mt-1">Yonetim paneline giris yapin</p>
         </div>
 
         {/* Login Card */}
-        <div className="bg-slate-900/80 backdrop-blur-xl border border-slate-800 rounded-2xl p-8 shadow-2xl">
+        <div className="bg-white border border-[#e8e2da] rounded-2xl p-8 shadow-[0_8px_40px_-12px_rgba(0,0,0,0.08)]">
           <form onSubmit={handleSubmit} className="space-y-5">
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-1.5">
+              <label className="block text-sm font-medium text-[#5a554e] mb-1.5">
                 Email
               </label>
               <input
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="w-full px-4 py-3 bg-slate-800/50 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
+                className="w-full px-4 py-3 bg-[#faf8f5] border border-[#e8e2da] rounded-xl text-[#2d2a26] placeholder-[#bfb8ae] focus:outline-none focus:ring-2 focus:ring-[#7c8cf5]/40 focus:border-[#7c8cf5]/40 transition-all"
                 placeholder="admin@ocianix.com"
                 required
                 autoFocus
@@ -77,21 +79,21 @@ function LoginForm() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-1.5">
-                Şifre
+              <label className="block text-sm font-medium text-[#5a554e] mb-1.5">
+                Sifre
               </label>
               <input
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full px-4 py-3 bg-slate-800/50 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
-                placeholder="••••••••"
+                className="w-full px-4 py-3 bg-[#faf8f5] border border-[#e8e2da] rounded-xl text-[#2d2a26] placeholder-[#bfb8ae] focus:outline-none focus:ring-2 focus:ring-[#7c8cf5]/40 focus:border-[#7c8cf5]/40 transition-all"
+                placeholder="********"
                 required
               />
             </div>
 
             {error && (
-              <div className="bg-red-500/10 border border-red-500/30 rounded-xl px-4 py-3 text-sm text-red-400">
+              <div className="bg-[#e87272]/8 border border-[#e87272]/20 rounded-xl px-4 py-3 text-sm text-[#c45555]">
                 {error}
               </div>
             )}
@@ -99,7 +101,7 @@ function LoginForm() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full py-3 px-4 bg-indigo-600 hover:bg-indigo-500 disabled:bg-indigo-800 disabled:cursor-not-allowed text-white font-medium rounded-xl transition-all duration-200 shadow-lg shadow-indigo-500/25"
+              className="w-full py-3 px-4 bg-[#7c8cf5] hover:bg-[#6b7bf0] disabled:bg-[#b8c0f5] disabled:cursor-not-allowed text-white font-medium rounded-xl transition-all duration-200 shadow-[0_4px_16px_-4px_rgba(124,140,245,0.4)]"
             >
               {loading ? (
                 <span className="flex items-center justify-center gap-2">
@@ -107,16 +109,16 @@ function LoginForm() {
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                   </svg>
-                  Giriş yapılıyor...
+                  Giris yapiliyor...
                 </span>
               ) : (
-                'Giriş Yap'
+                'Giris Yap'
               )}
             </button>
           </form>
         </div>
 
-        <p className="text-center text-slate-600 text-sm mt-6">
+        <p className="text-center text-[#bfb8ae] text-sm mt-6">
           Ocianix AI Solutions
         </p>
       </div>

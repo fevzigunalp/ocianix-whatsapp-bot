@@ -55,8 +55,8 @@ export function MessageInput({ conversationId, aiEnabled, onSend, onToggleAI }: 
       {/* Mode indicator */}
       {isInternal && (
         <div className="flex items-center gap-1.5 mb-2 px-1">
-          <StickyNote className="w-3 h-3 text-amber-400" />
-          <span className="text-[11px] text-amber-400 font-medium">Internal Note — won't be sent to customer</span>
+          <StickyNote className="w-3 h-3 text-[#c9a055]" />
+          <span className="text-[11px] text-[#c9a055] font-medium">Internal Note — won't be sent to customer</span>
         </div>
       )}
 
@@ -72,7 +72,7 @@ export function MessageInput({ conversationId, aiEnabled, onSend, onToggleAI }: 
             className={cn(
               'w-full resize-none px-4 py-2.5 bg-muted/50 border rounded-xl text-sm text-foreground placeholder-muted-foreground focus:outline-none focus:ring-1 transition-all',
               isInternal
-                ? 'border-amber-500/30 focus:ring-amber-500/30'
+                ? 'border-[#f0b775]/30 focus:ring-[#f0b775]/30'
                 : 'border-border focus:ring-ring'
             )}
             rows={1}
@@ -87,7 +87,7 @@ export function MessageInput({ conversationId, aiEnabled, onSend, onToggleAI }: 
             className={cn(
               'p-2 rounded-lg transition-colors',
               isInternal
-                ? 'bg-amber-500/10 text-amber-400'
+                ? 'bg-[#f0b775]/10 text-[#c9a055]'
                 : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
             )}
             title="Toggle internal note"
@@ -101,7 +101,7 @@ export function MessageInput({ conversationId, aiEnabled, onSend, onToggleAI }: 
             className={cn(
               'p-2 rounded-lg transition-colors',
               aiEnabled
-                ? 'bg-violet-500/10 text-violet-400'
+                ? 'bg-[#9b8cf5]/10 text-[#9b8cf5]'
                 : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
             )}
             title={aiEnabled ? 'AI active' : 'AI paused'}

@@ -74,12 +74,12 @@ export default async function DashboardPage() {
   ])
 
   const statCards = [
-    { label: 'Open Conversations', value: stats.openConversations, icon: MessageSquare, color: 'text-blue-400', bg: 'bg-blue-400/10' },
-    { label: 'Total Contacts', value: stats.totalContacts, icon: Users, color: 'text-emerald-400', bg: 'bg-emerald-400/10' },
-    { label: 'AI Messages', value: stats.totalMessages, icon: Bot, color: 'text-violet-400', bg: 'bg-violet-400/10' },
-    { label: 'Active Deals', value: stats.totalDeals, icon: TrendingUp, color: 'text-amber-400', bg: 'bg-amber-400/10' },
-    { label: 'Resolved Today', value: stats.resolvedToday, icon: CheckCircle, color: 'text-green-400', bg: 'bg-green-400/10' },
-    { label: 'Pending Tasks', value: stats.pendingTasks, icon: Clock, color: 'text-rose-400', bg: 'bg-rose-400/10' },
+    { label: 'Open Conversations', value: stats.openConversations, icon: MessageSquare, color: 'text-[#6b9cf7]', bg: 'bg-[#6b9cf7]/8' },
+    { label: 'Total Contacts', value: stats.totalContacts, icon: Users, color: 'text-[#6bc9a0]', bg: 'bg-[#6bc9a0]/8' },
+    { label: 'AI Messages', value: stats.totalMessages, icon: Bot, color: 'text-[#9b8cf5]', bg: 'bg-[#9b8cf5]/8' },
+    { label: 'Active Deals', value: stats.totalDeals, icon: TrendingUp, color: 'text-[#f0b775]', bg: 'bg-[#f0b775]/8' },
+    { label: 'Resolved Today', value: stats.resolvedToday, icon: CheckCircle, color: 'text-[#7bcba4]', bg: 'bg-[#7bcba4]/8' },
+    { label: 'Pending Tasks', value: stats.pendingTasks, icon: Clock, color: 'text-[#e8a0a0]', bg: 'bg-[#e8a0a0]/8' },
   ]
 
   const totalPipelineDeals = pipelineData.reduce((s, p) => s + p.count, 0)

@@ -132,9 +132,9 @@ export function ContactSidebar({ conversationId, onClose }: Props) {
             <span className="text-muted-foreground">Handler</span>
             <div className="flex items-center gap-1">
               {data.aiEnabled ? (
-                <Bot className="w-3 h-3 text-violet-400" />
+                <Bot className="w-3 h-3 text-[#9b8cf5]" />
               ) : (
-                <User className="w-3 h-3 text-blue-400" />
+                <User className="w-3 h-3 text-[#6b9cf7]" />
               )}
               <span className="text-foreground capitalize">{data.handlerType}</span>
             </div>

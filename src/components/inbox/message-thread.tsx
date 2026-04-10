@@ -71,7 +71,7 @@ export function MessageThread({ conversationId, newMessages = [] }: Props) {
       case 'pending': return <Clock className="w-3 h-3 text-muted-foreground" />
       case 'sent': return <Check className="w-3 h-3 text-muted-foreground" />
       case 'delivered': return <CheckCheck className="w-3 h-3 text-muted-foreground" />
-      case 'read': return <CheckCheck className="w-3 h-3 text-blue-400" />
+      case 'read': return <CheckCheck className="w-3 h-3 text-[#6b9cf7]" />
       case 'failed': return <AlertCircle className="w-3 h-3 text-red-400" />
       default: return null
     }
@@ -104,19 +104,19 @@ export function MessageThread({ conversationId, newMessages = [] }: Props) {
               className={cn(
                 'max-w-[70%] rounded-2xl px-4 py-2.5 relative group',
                 isInternal
-                  ? 'bg-amber-500/10 border border-amber-500/20 text-amber-200'
+                  ? 'bg-[#f5edda] border border-[#e8dcc4] text-[#7a6b4e]'
                   : isOutbound
                     ? isAI
-                      ? 'bg-violet-600/20 border border-violet-500/20 text-foreground'
-                      : 'bg-primary/20 border border-primary/20 text-foreground'
-                    : 'bg-muted border border-border text-foreground'
+                      ? 'bg-[#ede8fb] border border-[#ddd5f5] text-foreground'
+                      : 'bg-[#e3e8fd] border border-[#d2d9f8] text-foreground'
+                    : 'bg-white border border-border text-foreground shadow-sm'
               )}
             >
               {/* Sender indicator */}
               {isOutbound && (
                 <div className="flex items-center gap-1 mb-1">
                   {isAI ? (
-                    <Bot className="w-3 h-3 text-violet-400" />
+                    <Bot className="w-3 h-3 text-[#9b8cf5]" />
                   ) : isInternal ? (
                     <span className="text-[10px] text-amber-400 font-medium">Internal Note</span>
                   ) : (
