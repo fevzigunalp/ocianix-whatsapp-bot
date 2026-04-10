@@ -1,6 +1,6 @@
 import { db } from '@/lib/db'
 import { withAuth, apiSuccess, apiError, parseBody } from '@/lib/api/middleware'
-import { buildPrompt } from '@/lib/ai/prompt-builder'
+import { buildSystemPrompt } from '@/lib/ai/prompt-builder'
 
 export const GET = withAuth(async (req, { tenantId }) => {
   const packs = await db.clientPack.findMany({
@@ -72,7 +72,15 @@ export const PATCH = withAuth(async (req, { tenantId }) => {
     const actions = await db.actionDefinition.findMany({
       where: { tenantId, isEnabled: true },
     })
-    const compiledPrompt = buildPrompt(pack, '', actions, [])
+    const compiledPrompt = buildSystemPrompt(
+      pack ? {
+        businessName: pack.businessName, industry: pack.industry, websiteUrl: pack.websiteUrl,
+        tonePreset: pack.tonePreset, formality: pack.formality, useEmoji: pack.useEmoji,
+        maxResponseLen: pack.maxResponseLen, customInstructions: pack.customInstructions,
+        language: pack.language,
+      } : null,
+      { contactName: null, contactPhone: '', recentMessages: [] }
+    )
 
     // Publish new pack
     const updated = await db.clientPack.update({

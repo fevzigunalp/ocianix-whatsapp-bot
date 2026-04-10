@@ -1,96 +1,132 @@
-import type { ClientPack, ActionDefinition } from '@prisma/client'
-
 /**
- * Build the system prompt from Client Pack configuration
- * Assembles: identity, tone, knowledge context, actions, and decision instructions
+ * Prompt Builder v1 — builds system prompt from client pack + conversation context.
+ * Practical, stable, no over-engineering.
  */
-export function buildPrompt(
-  pack: ClientPack | null,
-  knowledgeContext: string,
-  actions: ActionDefinition[],
-  conversationHistory: Array<{ role: string; content: string }>
+
+interface PackContext {
+  businessName: string | null
+  industry: string | null
+  websiteUrl: string | null
+  tonePreset: string
+  formality: string
+  useEmoji: boolean
+  maxResponseLen: number
+  customInstructions: string | null
+  language: string
+}
+
+interface ConversationContext {
+  contactName: string | null
+  contactPhone: string
+  recentMessages: Array<{
+    direction: string
+    sender: string
+    body: string | null
+    createdAt: Date
+  }>
+}
+
+const TONE_MAP: Record<string, string> = {
+  friendly: 'Samimi, sicak ve konuskan bir tonda yaz. Yardimci ve pozitif ol.',
+  professional: 'Profesyonel, kibar ve bilgilendirici bir tonda yaz. Is odakli ol.',
+  luxury: 'Zarif, ozenli ve rafine bir dilde yaz. Premium hizmet algisi yarat.',
+  sales: 'Enerjik, ikna edici ve cozum odakli yaz. Faydaya odaklan.',
+}
+
+export function buildSystemPrompt(
+  pack: PackContext | null,
+  conversation: ConversationContext
 ): string {
-  if (pack?.compiledPrompt) return pack.compiledPrompt
+  const parts: string[] = []
 
-  const sections: string[] = []
+  // Identity
+  const biz = pack?.businessName || 'the business'
+  parts.push(`You are a WhatsApp customer service assistant for ${biz}.`)
+  if (pack?.websiteUrl) parts.push(`Website: ${pack.websiteUrl}`)
+  if (pack?.industry) parts.push(`Industry: ${pack.industry}`)
 
-  // 1. Identity
-  sections.push(`# Identity
-You are an AI assistant for ${pack?.businessName || 'the business'}.
-${pack?.websiteUrl ? `Website: ${pack.websiteUrl}` : ''}
-Industry: ${pack?.industry || 'general'}
-Language: ${pack?.language === 'tr' ? 'Turkish (Türkçe)' : 'English'}`)
+  // Language
+  const lang = pack?.language === 'en' ? 'English' : 'Turkish'
+  parts.push(`\nAlways respond in ${lang}.`)
 
-  // 2. Tone & Style
-  const toneInstructions: Record<string, string> = {
-    friendly: 'Be warm, approachable, and conversational. Use a casual but respectful tone.',
-    professional: 'Be polite, concise, and informative. Maintain a business-appropriate tone.',
-    luxury: 'Be elegant, refined, and attentive. Use sophisticated language that reflects premium service.',
-    sales: 'Be enthusiastic, persuasive, and solution-oriented. Focus on benefits and value.',
+  // Tone
+  const tone = TONE_MAP[pack?.tonePreset || 'professional'] || TONE_MAP.professional
+  parts.push(tone)
+  if (pack?.formality === 'sen') {
+    parts.push('Use informal "sen" form.')
+  } else {
+    parts.push('Use formal "siz" form.')
+  }
+  if (pack?.useEmoji) {
+    parts.push('You may use emojis sparingly.')
+  } else {
+    parts.push('Do not use emojis.')
   }
 
-  sections.push(`# Tone & Style
-${toneInstructions[pack?.tonePreset || 'professional']}
-- Address the customer using "${pack?.formality === 'sen' ? 'sen' : 'siz'}" form
-- ${pack?.useEmoji ? 'Use emojis sparingly to add warmth' : 'Do not use emojis'}
-- Keep responses under ${pack?.maxResponseLen || 4} sentences
-${pack?.customInstructions ? `\nAdditional instructions: ${pack.customInstructions}` : ''}`)
+  // Response format
+  const maxLen = pack?.maxResponseLen || 4
+  parts.push(`\nKeep responses under ${maxLen} sentences. Be concise and helpful.`)
 
-  // 3. Knowledge Context
-  if (knowledgeContext) {
-    sections.push(`# Knowledge Base
-Use the following information to answer questions. Only use this knowledge — do not make up information.
-If you don't know the answer, say so honestly.
-
-${knowledgeContext}`)
+  // Custom instructions
+  if (pack?.customInstructions) {
+    parts.push(`\nAdditional instructions: ${pack.customInstructions}`)
   }
 
-  // 4. Available Actions
-  if (actions.length > 0) {
-    const actionList = actions.map(a =>
-      `- ${a.name}: ${a.description || a.displayName || a.name}`
-    ).join('\n')
+  // Safety rules
+  parts.push(`
+IMPORTANT RULES:
+- Only answer based on what you know about this business.
+- If you don't have specific information, say so honestly. Suggest the customer contact a representative for details.
+- Never invent prices, dates, or facts you don't know.
+- Never share competitor information.
+- If the customer seems upset or mentions legal issues, politely offer to connect them with a human representative.
+- If you cannot help after 2 attempts, suggest human assistance.`)
 
-    sections.push(`# Available Actions
-You can trigger these actions when appropriate:
-${actionList}
-
-To trigger an action, include it in your JSON decision response.`)
+  // Contact context
+  if (conversation.contactName) {
+    parts.push(`\nYou are speaking with: ${conversation.contactName}`)
   }
 
-  // 5. Decision Format
-  sections.push(`# Response Format
-You MUST respond with a JSON object in this format:
-{
-  "decision": "answer" | "ask" | "collect" | "refuse" | "escalate" | "action",
-  "confidence": 0-100,
-  "intent": "FAQ" | "PRICING" | "PRODUCT" | "APPOINTMENT" | "COMPLAINT" | "GREETING" | "OTHER",
-  "response": "your response text to the customer",
-  "action": { "name": "action_name", "params": {} } or null
-}
-
-Decision rules:
-- "answer": if you found relevant info and confidence > 60
-- "ask": if the question is ambiguous and you need 1 clarification
-- "collect": if you need customer information before proceeding
-- "refuse": if the question violates business policies
-- "escalate": if you cannot help after the conversation context shows multiple attempts
-- "action": if the customer's request maps to an available action`)
-
-  return sections.join('\n\n')
+  return parts.join('\n')
 }
 
 /**
- * Build Claude tool definitions from action registry
+ * Build the messages array for Claude from recent conversation history.
+ * Returns alternating user/assistant messages.
  */
-export function buildToolDefinitions(actions: ActionDefinition[]): Array<{
-  name: string
-  description: string
-  input_schema: any
-}> {
-  return actions.map(a => ({
-    name: a.name,
-    description: a.description || a.displayName || a.name,
-    input_schema: a.parameterSchema as any,
-  }))
+export function buildMessages(
+  conversation: ConversationContext,
+  currentMessage: string
+): Array<{ role: 'user' | 'assistant'; content: string }> {
+  const msgs: Array<{ role: 'user' | 'assistant'; content: string }> = []
+
+  // Add recent history (last N messages, skip internal notes)
+  for (const m of conversation.recentMessages) {
+    if (!m.body) continue
+    if (m.direction === 'inbound') {
+      msgs.push({ role: 'user', content: m.body })
+    } else if (m.sender === 'ai' || m.sender === 'agent') {
+      msgs.push({ role: 'assistant', content: m.body })
+    }
+  }
+
+  // Add current message
+  msgs.push({ role: 'user', content: currentMessage })
+
+  // Claude requires alternating roles — merge consecutive same-role messages
+  const merged: typeof msgs = []
+  for (const m of msgs) {
+    if (merged.length > 0 && merged[merged.length - 1].role === m.role) {
+      merged[merged.length - 1].content += '\n' + m.content
+    } else {
+      merged.push({ ...m })
+    }
+  }
+
+  // Claude requires first message to be 'user'
+  if (merged.length > 0 && merged[0].role !== 'user') {
+    merged.shift()
+  }
+
+  return merged
 }

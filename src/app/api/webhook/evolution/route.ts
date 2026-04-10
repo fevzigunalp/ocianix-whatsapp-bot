@@ -3,6 +3,7 @@ import { db } from '@/lib/db'
 import { redis, tenantKey } from '@/lib/redis'
 import { publishSSE } from '@/lib/sse'
 import { formatPhone } from '@/lib/utils'
+import { triggerAIResponse } from '@/lib/ai/responder'
 
 export async function POST(req: NextRequest) {
   try {
@@ -207,7 +208,22 @@ async function handleMessageUpsert(
         },
       },
     })
-    console.log('[Webhook:msg] SSE published | DONE')
+    console.log('[Webhook:msg] SSE published')
+
+    // Trigger AI auto-reply (non-blocking — runs in background)
+    if (!isFromMe && conversation.aiEnabled) {
+      triggerAIResponse({
+        tenantId,
+        conversationId: conversation.id,
+        contactId: contact.id,
+        messageId: message.id,
+        messageBody: body || '',
+        instanceId,
+      }).catch(err => console.error('[Webhook:msg] AI trigger error:', err.message))
+      console.log('[Webhook:msg] AI trigger fired')
+    }
+
+    console.log('[Webhook:msg] DONE')
   }
 }
 

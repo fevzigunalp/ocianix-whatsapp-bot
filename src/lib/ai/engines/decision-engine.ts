@@ -3,7 +3,7 @@ import { redis, tenantKey } from '@/lib/redis'
 import { evaluatePolicies, type PolicyResult } from './policy-engine'
 import { executeAction, type ActionResult } from './action-engine'
 import { retrieveKnowledge } from './knowledge-engine'
-import { buildPrompt } from '../prompt-builder'
+import { buildSystemPrompt } from '../prompt-builder'
 
 export interface AIDecision {
   decision: 'answer' | 'ask' | 'collect' | 'refuse' | 'escalate' | 'action'
@@ -79,7 +79,15 @@ export async function processMessage(ctx: DecisionContext): Promise<AIDecision> 
     where: { tenantId: ctx.tenantId, isEnabled: true },
   })
 
-  const prompt = buildPrompt(pack, knowledgeContext, actions, ctx.conversationHistory)
+  const prompt = buildSystemPrompt(
+    pack ? {
+      businessName: pack.businessName, industry: pack.industry, websiteUrl: pack.websiteUrl,
+      tonePreset: pack.tonePreset, formality: pack.formality, useEmoji: pack.useEmoji,
+      maxResponseLen: pack.maxResponseLen, customInstructions: pack.customInstructions,
+      language: pack.language,
+    } : null,
+    { contactName: null, contactPhone: '', recentMessages: [] }
+  )
 
   // Call Claude API
   let aiDecision: AIDecision
