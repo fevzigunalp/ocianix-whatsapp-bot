@@ -18,6 +18,7 @@ import {
   ChevronLeft,
   LogOut,
   Zap,
+  Wand2,
   FileText,
   CheckSquare,
   Shield,
@@ -71,6 +72,7 @@ const navigation: NavItem[] = [
       { label: 'Cost Tracking', href: '/analytics/cost', icon: FileText },
     ],
   },
+  { label: 'Onboarding', href: '/onboarding', icon: Wand2 },
   { label: 'Settings', href: '/settings', icon: Settings },
 ]
 
