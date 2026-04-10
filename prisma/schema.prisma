@@ -1,0 +1,573 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [pgvector(map: "vector"), uuidOssp(map: "uuid-ossp")]
+}
+
+// ============================================================
+// CORE: TENANTS & USERS
+// ============================================================
+
+model Tenant {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name      String
+  slug      String   @unique
+  domain    String?
+  isActive  Boolean  @default(true) @map("is_active")
+  plan      String   @default("starter")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  users              User[]
+  contacts           Contact[]
+  conversations      Conversation[]
+  messages           Message[]
+  deals              Deal[]
+  tasks              Task[]
+  notes              Note[]
+  pipelines          Pipeline[]
+  pipelineStages     PipelineStage[]
+  policies           Policy[]
+  policyLogs         PolicyLog[]
+  actionDefinitions  ActionDefinition[]
+  actionLogs         ActionLog[]
+  knowledgeSources   KnowledgeSource[]
+  knowledgeChunks    KnowledgeChunk[]
+  faqPairs           FaqPair[]
+  clientPacks        ClientPack[]
+  testScenarios      TestScenario[]
+  aiLogs             AiLog[]
+  costEvents         CostEvent[]
+  analyticsEvents    AnalyticsEvent[]
+  whatsappInstances  WhatsappInstance[]
+  auditLogs          AuditLog[]
+
+  @@map("tenants")
+}
+
+model User {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId       String   @map("tenant_id") @db.Uuid
+  email          String   @unique
+  name           String?
+  passwordHash   String   @map("password_hash")
+  role           String   @default("agent") // super_admin, admin, agent
+  avatarUrl      String?  @map("avatar_url")
+  isActive       Boolean  @default(true) @map("is_active")
+  lastLoginAt    DateTime? @map("last_login_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  assignedConvos Conversation[] @relation("AssignedAgent")
+  createdNotes   Note[]
+
+  @@index([tenantId])
+  @@map("users")
+}
+
+// ============================================================
+// CRM: CONTACTS, CONVERSATIONS, MESSAGES
+// ============================================================
+
+model Contact {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId    String   @map("tenant_id") @db.Uuid
+  phone       String
+  name        String?
+  email       String?
+  avatarUrl   String?  @map("avatar_url")
+  tags        String[] @default([])
+  metadata    Json     @default("{}")
+  firstSeenAt DateTime @default(now()) @map("first_seen_at")
+  lastSeenAt  DateTime @default(now()) @map("last_seen_at")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversations Conversation[]
+  deals         Deal[]
+  tasks         Task[]
+  notes         Note[]
+
+  @@unique([tenantId, phone])
+  @@index([tenantId])
+  @@map("contacts")
+}
+
+model Conversation {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId      String   @map("tenant_id") @db.Uuid
+  contactId     String   @map("contact_id") @db.Uuid
+  instanceId    String?  @map("instance_id") @db.Uuid
+  status        String   @default("open") // open, pending, resolved, closed
+  handlerType   String   @default("ai") @map("handler_type") // ai, human, hybrid
+  aiEnabled     Boolean  @default(true) @map("ai_enabled")
+  assignedTo    String?  @map("assigned_to") @db.Uuid
+  lastMessageAt DateTime? @map("last_message_at")
+  unreadCount   Int      @default(0) @map("unread_count")
+  metadata      Json     @default("{}")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  tenant    Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contact   Contact           @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  instance  WhatsappInstance? @relation(fields: [instanceId], references: [id])
+  agent     User?             @relation("AssignedAgent", fields: [assignedTo], references: [id])
+  messages  Message[]
+  aiLogs    AiLog[]
+
+  @@index([tenantId, status])
+  @@index([tenantId, lastMessageAt])
+  @@map("conversations")
+}
+
+model Message {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId        String   @map("tenant_id") @db.Uuid
+  conversationId  String   @map("conversation_id") @db.Uuid
+  contactId       String?  @map("contact_id") @db.Uuid
+  direction       String   // inbound, outbound
+  sender          String   // customer, ai, agent, system
+  contentType     String   @default("text") @map("content_type") // text, image, video, audio, document, location, sticker
+  body            String?
+  mediaUrl        String?  @map("media_url")
+  mediaMetadata   Json?    @map("media_metadata")
+  whatsappMsgId   String?  @unique @map("whatsapp_msg_id")
+  status          String   @default("sent") // pending, sent, delivered, read, failed
+  isInternal      Boolean  @default(false) @map("is_internal") // internal notes
+  metadata        Json     @default("{}")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+  @@index([tenantId])
+  @@index([whatsappMsgId])
+  @@map("messages")
+}
+
+// ============================================================
+// CRM: PIPELINE, DEALS, TASKS, NOTES
+// ============================================================
+
+model Pipeline {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  name      String
+  isDefault Boolean  @default(false) @map("is_default")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  tenant Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  stages PipelineStage[]
+
+  @@index([tenantId])
+  @@map("pipelines")
+}
+
+model PipelineStage {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId   String   @map("tenant_id") @db.Uuid
+  pipelineId String   @map("pipeline_id") @db.Uuid
+  name       String
+  color      String   @default("#3b82f6")
+  position   Int      @default(0)
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  pipeline Pipeline @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  deals    Deal[]
+
+  @@index([pipelineId, position])
+  @@map("pipeline_stages")
+}
+
+model Deal {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  contactId String   @map("contact_id") @db.Uuid
+  stageId   String   @map("stage_id") @db.Uuid
+  title     String
+  value     Decimal  @default(0) @db.Decimal(12, 2)
+  currency  String   @default("TRY")
+  status    String   @default("open") // open, won, lost
+  closedAt  DateTime? @map("closed_at")
+  metadata  Json     @default("{}")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  tenant  Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contact Contact       @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  stage   PipelineStage @relation(fields: [stageId], references: [id])
+
+  @@index([tenantId, status])
+  @@map("deals")
+}
+
+model Task {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId   String    @map("tenant_id") @db.Uuid
+  contactId  String?   @map("contact_id") @db.Uuid
+  title      String
+  description String?
+  status     String    @default("todo") // todo, in_progress, done
+  priority   String    @default("medium") // low, medium, high, urgent
+  dueAt      DateTime? @map("due_at")
+  completedAt DateTime? @map("completed_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+
+  tenant  Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contact Contact? @relation(fields: [contactId], references: [id])
+
+  @@index([tenantId, status])
+  @@map("tasks")
+}
+
+model Note {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId   String   @map("tenant_id") @db.Uuid
+  contactId  String   @map("contact_id") @db.Uuid
+  authorId   String   @map("author_id") @db.Uuid
+  body       String
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  author  User    @relation(fields: [authorId], references: [id])
+
+  @@index([contactId, createdAt])
+  @@map("notes")
+}
+
+// ============================================================
+// AI: POLICIES, ACTIONS, KNOWLEDGE, CLIENT PACKS
+// ============================================================
+
+model Policy {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId   String   @map("tenant_id") @db.Uuid
+  packId     String?  @map("pack_id") @db.Uuid
+  policyType String   @map("policy_type") // answer, refuse, collect, ask, escalate, inform, restrict
+  ruleText   String   @map("rule_text")
+  keywords   String[] @default([])
+  priority   Int      @default(50) // 0=lowest, 100=highest
+  category   String?  // pricing, legal, product, general
+  isActive   Boolean  @default(true) @map("is_active")
+  appliesTo  String   @default("all") @map("applies_to") // all, inbound, outbound
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  tenant     Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  pack       ClientPack? @relation(fields: [packId], references: [id])
+  policyLogs PolicyLog[]
+
+  @@index([tenantId, isActive])
+  @@map("policies")
+}
+
+model PolicyLog {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId       String   @map("tenant_id") @db.Uuid
+  policyId       String?  @map("policy_id") @db.Uuid
+  conversationId String?  @map("conversation_id") @db.Uuid
+  messageId      String?  @map("message_id") @db.Uuid
+  triggerPhase   String   @map("trigger_phase") // pre_response, post_response
+  triggerMethod  String   @map("trigger_method") // keyword, semantic
+  outcome        String   // pass, block, modify, escalate
+  details        String?
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  tenant Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  policy Policy? @relation(fields: [policyId], references: [id])
+
+  @@index([tenantId, createdAt])
+  @@map("policy_logs")
+}
+
+model ActionDefinition {
+  id                   String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId             String   @map("tenant_id") @db.Uuid
+  name                 String
+  displayName          String?  @map("display_name")
+  description          String?
+  parameterSchema      Json     @default("{}") @map("parameter_schema")
+  executionType        String   @map("execution_type") // internal, n8n_webhook, external_api
+  executionConfig      Json     @default("{}") @map("execution_config")
+  isEnabled            Boolean  @default(true) @map("is_enabled")
+  requiresConfirmation Boolean  @default(false) @map("requires_confirmation")
+  maxExecutionsPerHour Int      @default(100) @map("max_executions_per_hour")
+  timeoutMs            Int      @default(10000) @map("timeout_ms")
+  retryCount           Int      @default(1) @map("retry_count")
+  allowedDomains       String[] @default([]) @map("allowed_domains")
+  createdAt            DateTime @default(now()) @map("created_at")
+
+  tenant     Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  actionLogs ActionLog[]
+
+  @@unique([tenantId, name])
+  @@map("action_definitions")
+}
+
+model ActionLog {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId        String   @map("tenant_id") @db.Uuid
+  actionId        String   @map("action_id") @db.Uuid
+  conversationId  String?  @map("conversation_id") @db.Uuid
+  contactId       String?  @map("contact_id") @db.Uuid
+  parameters      Json?
+  result          Json?
+  status          String   // pending, success, failed, timeout, rejected
+  executionTimeMs Int?     @map("execution_time_ms")
+  retryAttempt    Int      @default(0) @map("retry_attempt")
+  errorMessage    String?  @map("error_message")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  tenant Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  action ActionDefinition @relation(fields: [actionId], references: [id])
+
+  @@index([tenantId, createdAt])
+  @@map("action_logs")
+}
+
+// ============================================================
+// KNOWLEDGE LAYER
+// ============================================================
+
+model KnowledgeSource {
+  id                    String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId              String   @map("tenant_id") @db.Uuid
+  sourceName            String   @map("source_name")
+  sourceType            String   @map("source_type") // website, file, google_sheet, manual
+  sourceUrl             String?  @map("source_url")
+  status                String   @default("pending") // pending, crawling, indexed, failed, stale
+  pageCount             Int      @default(0) @map("page_count")
+  chunkCount            Int      @default(0) @map("chunk_count")
+  trustLevel            String   @default("standard") @map("trust_level") // verified, standard, provisional
+  refreshIntervalHours  Int      @default(168) @map("refresh_interval_hours") // 7 days
+  autoRefresh           Boolean  @default(false) @map("auto_refresh")
+  lastIndexedAt         DateTime? @map("last_indexed_at")
+  expiresAt             DateTime? @map("expires_at")
+  metadata              Json     @default("{}")
+  createdAt             DateTime @default(now()) @map("created_at")
+
+  tenant Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  chunks KnowledgeChunk[]
+
+  @@index([tenantId])
+  @@map("knowledge_sources")
+}
+
+model KnowledgeChunk {
+  id              String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId        String                    @map("tenant_id") @db.Uuid
+  sourceId        String                    @map("source_id") @db.Uuid
+  content         String
+  category        String?                   // faq, pricing, product, general
+  embedding       Unsupported("vector(1536)")?
+  trustLevel      String                    @default("standard") @map("trust_level")
+  isExpired       Boolean                   @default(false) @map("is_expired")
+  pageUrl         String?                   @map("page_url")
+  pageTitle       String?                   @map("page_title")
+  chunkIndex      Int                       @default(0) @map("chunk_index")
+  lastIndexedAt   DateTime                  @default(now()) @map("last_indexed_at")
+  createdAt       DateTime                  @default(now()) @map("created_at")
+
+  tenant Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  source KnowledgeSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([sourceId])
+  @@map("knowledge_chunks")
+}
+
+model FaqPair {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  question  String
+  answer    String
+  category  String?
+  isActive  Boolean  @default(true) @map("is_active")
+  usageCount Int     @default(0) @map("usage_count")
+  embedding Unsupported("vector(1536)")?
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, isActive])
+  @@map("faq_pairs")
+}
+
+// ============================================================
+// CLIENT PACK SYSTEM
+// ============================================================
+
+model ClientPack {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId        String   @map("tenant_id") @db.Uuid
+  version         Int      @default(1)
+  status          String   @default("draft") // draft, active, archived
+  configTier      String   @default("simple") @map("config_tier") // simple, advanced, expert
+  industry        String?
+  businessName    String?  @map("business_name")
+  websiteUrl      String?  @map("website_url")
+  language        String   @default("tr")
+  timezone        String   @default("Europe/Istanbul")
+
+  // Tone configuration
+  tonePreset      String   @default("professional") @map("tone_preset") // friendly, professional, luxury, sales
+  formality       String   @default("siz") // sen, siz
+  useEmoji        Boolean  @default(false) @map("use_emoji")
+  maxResponseLen  Int      @default(4) @map("max_response_len") // sentences
+  customInstructions String? @map("custom_instructions")
+
+  // Escalation config
+  maxFails            Int    @default(2) @map("max_fails")
+  confidenceThreshold Int    @default(60) @map("confidence_threshold")
+
+  // Rate limiting
+  rateLimitConfig Json   @default("{\"ai_per_hour\": 30, \"ai_daily\": 500, \"cooldown_seconds\": 8}") @map("rate_limit_config")
+
+  // Full assembled prompt (cached)
+  compiledPrompt  String?  @map("compiled_prompt")
+
+  publishedAt     DateTime? @map("published_at")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  policies Policy[]
+
+  @@index([tenantId, status])
+  @@map("client_packs")
+}
+
+// ============================================================
+// AI LOGGING & ANALYTICS
+// ============================================================
+
+model TestScenario {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId        String   @map("tenant_id") @db.Uuid
+  inputMessage    String   @map("input_message")
+  expectedIntent  String?  @map("expected_intent")
+  mustContain     String[] @default([]) @map("must_contain")
+  mustNotContain  String[] @default([]) @map("must_not_contain")
+  expectedDecision String? @map("expected_decision")
+  lastResult      Json?    @map("last_result")
+  isActive        Boolean  @default(true) @map("is_active")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@map("test_scenarios")
+}
+
+model AiLog {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId        String   @map("tenant_id") @db.Uuid
+  conversationId  String?  @map("conversation_id") @db.Uuid
+  messageId       String?  @map("message_id") @db.Uuid
+  intent          String?
+  confidence      Int?
+  decision        String?  // answer, ask, collect, refuse, escalate, action
+  actionName      String?  @map("action_name")
+  inputTokens     Int?     @map("input_tokens")
+  outputTokens    Int?     @map("output_tokens")
+  latencyMs       Int?     @map("latency_ms")
+  packVersion     Int?     @map("pack_version")
+  sourcesUsed     String[] @default([]) @map("sources_used")
+  metadata        Json     @default("{}")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversation Conversation? @relation(fields: [conversationId], references: [id])
+
+  @@index([tenantId, createdAt])
+  @@map("ai_logs")
+}
+
+model CostEvent {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId      String   @map("tenant_id") @db.Uuid
+  eventType     String   @map("event_type") // ai_call, embedding, crawl
+  tokensInput   Int?     @map("tokens_input")
+  tokensOutput  Int?     @map("tokens_output")
+  estimatedCostUsd Decimal? @map("estimated_cost_usd") @db.Decimal(10, 6)
+  metadata      Json     @default("{}")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@map("cost_events")
+}
+
+model AnalyticsEvent {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  eventType String   @map("event_type")
+  entityType String? @map("entity_type")
+  entityId  String?  @map("entity_id") @db.Uuid
+  data      Json     @default("{}")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, eventType, createdAt])
+  @@map("analytics_events")
+}
+
+// ============================================================
+// WHATSAPP INSTANCES
+// ============================================================
+
+model WhatsappInstance {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId      String   @map("tenant_id") @db.Uuid
+  instanceName  String   @map("instance_name")
+  instanceId    String?  @map("instance_id") // Evolution API instance ID
+  phoneNumber   String?  @map("phone_number")
+  status        String   @default("disconnected") // connected, disconnected, connecting, banned
+  qrCode        String?  @map("qr_code")
+  webhookUrl    String?  @map("webhook_url")
+  lastConnectedAt DateTime? @map("last_connected_at")
+  healthLog     Json     @default("[]") @map("health_log")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversations Conversation[]
+
+  @@unique([tenantId, instanceName])
+  @@map("whatsapp_instances")
+}
+
+// ============================================================
+// AUDIT LOG
+// ============================================================
+
+model AuditLog {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId   String   @map("tenant_id") @db.Uuid
+  userId     String?  @map("user_id") @db.Uuid
+  action     String   // create, update, delete, login, etc.
+  entityType String   @map("entity_type")
+  entityId   String?  @map("entity_id")
+  oldData    Json?    @map("old_data")
+  newData    Json?    @map("new_data")
+  ipAddress  String?  @map("ip_address")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@map("audit_logs")
+}
