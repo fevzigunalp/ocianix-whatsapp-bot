@@ -1,16 +1,11 @@
 const EVOLUTION_URL = process.env.EVOLUTION_API_URL || 'http://localhost:8080'
 const EVOLUTION_KEY = process.env.EVOLUTION_API_KEY || ''
 
-interface EvolutionResponse {
-  instance?: any
-  qrcode?: { base64: string }
-  key?: { id: string }
-  status?: string
-  error?: string
-}
-
 async function evolutionFetch(path: string, options: RequestInit = {}): Promise<any> {
-  const res = await fetch(`${EVOLUTION_URL}${path}`, {
+  const url = `${EVOLUTION_URL}${path}`
+  console.log('[Evolution]', options.method || 'GET', path)
+
+  const res = await fetch(url, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
@@ -18,40 +13,62 @@ async function evolutionFetch(path: string, options: RequestInit = {}): Promise<
       ...options.headers,
     },
   })
+
   if (!res.ok) {
     const text = await res.text()
-    throw new Error(`Evolution API error ${res.status}: ${text}`)
+    console.error('[Evolution] Error', res.status, text.substring(0, 200))
+    throw new Error(`Evolution API ${res.status}: ${text.substring(0, 200)}`)
   }
+
   return res.json()
 }
 
 export const evolutionAPI = {
-  // Instance management
+  /**
+   * Fetch all instances with their status
+   */
+  async listInstances(): Promise<Array<{
+    instanceName: string
+    instanceId: string
+    owner: string | null
+    profileName: string | null
+    status: string
+  }>> {
+    const raw = await evolutionFetch('/instance/fetchInstances')
+    // v1.8.x wraps each in { instance: {...} }
+    return raw.map((item: any) => {
+      const inst = item.instance || item
+      return {
+        instanceName: inst.instanceName || inst.name,
+        instanceId: inst.instanceId || inst.id,
+        owner: inst.owner || inst.ownerJid || null,
+        profileName: inst.profileName || null,
+        status: inst.status === 'open' ? 'connected' :
+                inst.status === 'close' ? 'disconnected' :
+                inst.status === 'connecting' ? 'connecting' : inst.status,
+      }
+    })
+  },
+
+  async getConnectionState(instanceName: string): Promise<string> {
+    const data = await evolutionFetch(`/instance/connectionState/${instanceName}`)
+    const state = data?.instance?.state || data?.state
+    if (state === 'open') return 'connected'
+    if (state === 'close') return 'disconnected'
+    return state || 'disconnected'
+  },
+
   async createInstance(instanceName: string) {
     return evolutionFetch('/instance/create', {
       method: 'POST',
       body: JSON.stringify({
         instanceName,
-        integration: 'WHATSAPP-BAILEYS',
         qrcode: true,
-        webhookUrl: `${process.env.NEXT_PUBLIC_APP_URL}/api/webhook/evolution`,
-        webhookByEvents: false,
-        webhookBase64: false,
-        webhookEvents: [
-          'MESSAGES_UPSERT',
-          'MESSAGES_UPDATE',
-          'CONNECTION_UPDATE',
-          'QRCODE_UPDATED',
-        ],
       }),
     })
   },
 
-  async getInstanceStatus(instanceName: string) {
-    return evolutionFetch(`/instance/connectionState/${instanceName}`)
-  },
-
-  async getQrCode(instanceName: string) {
+  async connectInstance(instanceName: string) {
     return evolutionFetch(`/instance/connect/${instanceName}`)
   },
 
@@ -59,17 +76,27 @@ export const evolutionAPI = {
     return evolutionFetch(`/instance/delete/${instanceName}`, { method: 'DELETE' })
   },
 
-  async listInstances() {
-    return evolutionFetch('/instance/fetchInstances')
+  async setWebhook(instanceName: string, url: string) {
+    return evolutionFetch(`/webhook/set/${instanceName}`, {
+      method: 'POST',
+      body: JSON.stringify({
+        enabled: true,
+        url,
+        events: ['MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'CONNECTION_UPDATE', 'QRCODE_UPDATED'],
+      }),
+    })
   },
 
-  // Messaging
+  /**
+   * Send text message — v1.8.x format uses textMessage wrapper
+   */
   async sendText(instanceName: string, number: string, text: string) {
+    console.log('[Evolution] sendText to', number, 'via', instanceName)
     return evolutionFetch(`/message/sendText/${instanceName}`, {
       method: 'POST',
       body: JSON.stringify({
         number,
-        text,
+        textMessage: { text },
       }),
     })
   },
@@ -84,38 +111,6 @@ export const evolutionAPI = {
     return evolutionFetch(`/message/sendMedia/${instanceName}`, {
       method: 'POST',
       body: JSON.stringify(params),
-    })
-  },
-
-  async sendDocument(instanceName: string, number: string, media: string, fileName: string, caption?: string) {
-    return evolutionFetch(`/message/sendMedia/${instanceName}`, {
-      method: 'POST',
-      body: JSON.stringify({
-        number,
-        mediatype: 'document',
-        media,
-        fileName,
-        caption: caption || '',
-      }),
-    })
-  },
-
-  // Webhook configuration
-  async setWebhook(instanceName: string, url: string) {
-    return evolutionFetch(`/webhook/set/${instanceName}`, {
-      method: 'POST',
-      body: JSON.stringify({
-        enabled: true,
-        url,
-        webhookByEvents: false,
-        webhookBase64: false,
-        events: [
-          'MESSAGES_UPSERT',
-          'MESSAGES_UPDATE',
-          'CONNECTION_UPDATE',
-          'QRCODE_UPDATED',
-        ],
-      }),
     })
   },
 }
