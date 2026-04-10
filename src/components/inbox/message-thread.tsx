@@ -23,132 +23,95 @@ interface Props {
   newMessages?: Message[]
 }
 
+const STATUS_ICON: Record<string, React.ReactNode> = {
+  pending: <Clock className="w-3 h-3 text-muted-foreground" />,
+  sent: <Check className="w-3 h-3 text-muted-foreground" />,
+  delivered: <CheckCheck className="w-3 h-3 text-muted-foreground" />,
+  read: <CheckCheck className="w-3 h-3 text-info" />,
+  failed: <AlertCircle className="w-3 h-3 text-destructive" />,
+}
+
 export function MessageThread({ conversationId, newMessages = [] }: Props) {
   const [messages, setMessages] = useState<Message[]>([])
   const [loading, setLoading] = useState(true)
   const scrollRef = useRef<HTMLDivElement>(null)
 
-  useEffect(() => {
-    loadMessages()
-  }, [conversationId])
+  useEffect(() => { load() }, [conversationId])
 
   useEffect(() => {
     if (newMessages.length > 0) {
       setMessages(prev => {
         const ids = new Set(prev.map(m => m.id))
-        const fresh = newMessages.filter(m => !ids.has(m.id))
-        return [...prev, ...fresh]
+        return [...prev, ...newMessages.filter(m => !ids.has(m.id))]
       })
     }
   }, [newMessages])
 
   useEffect(() => {
-    scrollToBottom()
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
   }, [messages])
 
-  async function loadMessages() {
+  async function load() {
     setLoading(true)
     try {
-      const data = await apiFetch<{ messages: Message[] }>(
-        `/api/messages?conversationId=${conversationId}&limit=100`
-      )
+      const data = await apiFetch<{ messages: Message[] }>(`/api/messages?conversationId=${conversationId}&limit=100`)
       setMessages(data.messages)
-    } catch (e) {
-      console.error('Failed to load messages:', e)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  function scrollToBottom() {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-    }
-  }
-
-  const statusIcon = (status: string) => {
-    switch (status) {
-      case 'pending': return <Clock className="w-3 h-3 text-muted-foreground" />
-      case 'sent': return <Check className="w-3 h-3 text-muted-foreground" />
-      case 'delivered': return <CheckCheck className="w-3 h-3 text-muted-foreground" />
-      case 'read': return <CheckCheck className="w-3 h-3 text-[#6b9cf7]" />
-      case 'failed': return <AlertCircle className="w-3 h-3 text-red-400" />
-      default: return null
-    }
+    } catch { /* empty */ } finally { setLoading(false) }
   }
 
   if (loading) {
     return (
       <div className="flex-1 flex items-center justify-center">
-        <div className="w-6 h-6 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+        <div className="w-5 h-5 border-2 border-primary/20 border-t-primary rounded-full animate-spin" />
       </div>
     )
   }
 
   return (
-    <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-2">
+    <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-1.5">
       {messages.map((msg) => {
-        const isOutbound = msg.direction === 'outbound'
-        const isAI = msg.sender === 'ai'
-        const isInternal = msg.isInternal
+        const out = msg.direction === 'outbound'
+        const ai = msg.sender === 'ai'
+        const internal = msg.isInternal
 
         return (
-          <div
-            key={msg.id}
-            className={cn(
-              'flex',
-              isOutbound ? 'justify-end' : 'justify-start'
-            )}
-          >
-            <div
-              className={cn(
-                'max-w-[70%] rounded-2xl px-4 py-2.5 relative group',
-                isInternal
-                  ? 'bg-[#f5edda] border border-[#e8dcc4] text-[#7a6b4e]'
-                  : isOutbound
-                    ? isAI
-                      ? 'bg-[#ede8fb] border border-[#ddd5f5] text-foreground'
-                      : 'bg-[#e3e8fd] border border-[#d2d9f8] text-foreground'
-                    : 'bg-white border border-border text-foreground shadow-sm'
-              )}
-            >
-              {/* Sender indicator */}
-              {isOutbound && (
-                <div className="flex items-center gap-1 mb-1">
-                  {isAI ? (
-                    <Bot className="w-3 h-3 text-[#9b8cf5]" />
-                  ) : isInternal ? (
-                    <span className="text-[10px] text-amber-400 font-medium">Internal Note</span>
-                  ) : (
-                    <User className="w-3 h-3 text-primary" />
-                  )}
+          <div key={msg.id} className={cn('flex', out ? 'justify-end' : 'justify-start')}>
+            <div className={cn(
+              'max-w-[85%] sm:max-w-[75%] lg:max-w-[65%] rounded-2xl px-3.5 py-2 text-foreground',
+              internal
+                ? 'bg-bubble-internal border border-bubble-internal-border'
+                : out
+                  ? ai
+                    ? 'bg-bubble-ai border border-bubble-ai-border'
+                    : 'bg-bubble-agent border border-bubble-agent-border'
+                  : 'bg-bubble-customer border border-bubble-customer-border shadow-sm'
+            )}>
+              {/* Sender label */}
+              {out && (
+                <div className="flex items-center gap-1 mb-0.5">
+                  {ai ? <Bot className="w-3 h-3 text-accent-foreground" /> : internal ? null : <User className="w-3 h-3 text-primary" />}
                   <span className="text-[10px] text-muted-foreground">
-                    {isAI ? 'AI Bot' : isInternal ? '' : 'Agent'}
+                    {ai ? 'AI Bot' : internal ? 'Internal Note' : 'Agent'}
                   </span>
                 </div>
               )}
 
-              {/* Content */}
+              {/* Body */}
               {msg.contentType === 'text' ? (
-                <p className="text-sm whitespace-pre-wrap break-words">{msg.body}</p>
+                <p className="text-[13px] whitespace-pre-wrap break-words leading-relaxed">{msg.body}</p>
               ) : msg.contentType === 'image' && msg.mediaUrl ? (
                 <div>
-                  <img src={msg.mediaUrl} alt="" className="rounded-lg max-w-full max-h-64 object-cover" />
-                  {msg.body && <p className="text-sm mt-1">{msg.body}</p>}
+                  <img src={msg.mediaUrl} alt="" className="rounded-lg max-w-full max-h-60 object-cover" />
+                  {msg.body && <p className="text-[13px] mt-1">{msg.body}</p>}
                 </div>
               ) : (
-                <div className="flex items-center gap-2 text-sm">
-                  <span className="text-muted-foreground">[{msg.contentType}]</span>
-                  {msg.body && <span>{msg.body}</span>}
-                </div>
+                <p className="text-[13px] text-muted-foreground">[{msg.contentType}] {msg.body || ''}</p>
               )}
 
-              {/* Time + Status */}
-              <div className="flex items-center justify-end gap-1 mt-1">
-                <span className="text-[10px] text-muted-foreground">
-                  {format(new Date(msg.createdAt), 'HH:mm')}
-                </span>
-                {isOutbound && statusIcon(msg.status)}
+              {/* Time + status */}
+              <div className="flex items-center justify-end gap-1 mt-0.5">
+                <span className="text-[10px] text-muted-foreground">{format(new Date(msg.createdAt), 'HH:mm')}</span>
+                {out && STATUS_ICON[msg.status]}
               </div>
             </div>
           </div>
@@ -156,9 +119,7 @@ export function MessageThread({ conversationId, newMessages = [] }: Props) {
       })}
 
       {messages.length === 0 && (
-        <div className="text-center py-12 text-sm text-muted-foreground">
-          No messages yet. Start the conversation!
-        </div>
+        <p className="text-center py-12 text-[13px] text-muted-foreground">No messages yet</p>
       )}
     </div>
   )

@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 @theme inline {
-  /* Warm cream & pastel palette */
+  /* ── Warm cream palette ── */
   --color-background: #faf8f5;
   --color-foreground: #2d2a26;
   --color-card: #ffffff;
@@ -9,23 +9,48 @@
   --color-muted: #f3efe9;
   --color-muted-foreground: #8a8078;
   --color-border: #e8e2da;
-  --color-input: #e8e2da;
+  --color-input: #f3efe9;
   --color-ring: #7c8cf5;
+
+  /* ── Semantic colors ── */
   --color-primary: #7c8cf5;
   --color-primary-foreground: #ffffff;
   --color-secondary: #f3efe9;
   --color-secondary-foreground: #2d2a26;
-  --color-accent: #f3efe9;
-  --color-accent-foreground: #2d2a26;
+  --color-accent: #ede8fb;
+  --color-accent-foreground: #5b4fc7;
   --color-destructive: #e87272;
   --color-destructive-foreground: #ffffff;
   --color-success: #6bc9a0;
   --color-warning: #f0b775;
+  --color-info: #6b9cf7;
+
+  /* ── Accent palette (pastel) ── */
+  --color-pastel-blue: #6b9cf7;
+  --color-pastel-green: #6bc9a0;
+  --color-pastel-purple: #9b8cf5;
+  --color-pastel-orange: #f0b775;
+  --color-pastel-rose: #e8a0a0;
+  --color-pastel-teal: #7bcba4;
+
+  /* ── Message bubbles ── */
+  --color-bubble-customer: #ffffff;
+  --color-bubble-customer-border: #e8e2da;
+  --color-bubble-ai: #ede8fb;
+  --color-bubble-ai-border: #ddd5f5;
+  --color-bubble-agent: #e3e8fd;
+  --color-bubble-agent-border: #d2d9f8;
+  --color-bubble-internal: #f5edda;
+  --color-bubble-internal-border: #e8dcc4;
 
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --radius-sm: 0.5rem;
   --radius: 0.75rem;
+  --radius-lg: 1rem;
+  --radius-xl: 1.25rem;
 }
 
+/* ── Base ── */
 body {
   background: var(--color-background);
   color: var(--color-foreground);
@@ -34,24 +59,17 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--color-muted-foreground); }
 
-::-webkit-scrollbar-track {
-  background: transparent;
-}
+::selection { background: rgba(124, 140, 245, 0.15); }
 
-::-webkit-scrollbar-thumb {
-  background: #d5cfc7;
-  border-radius: 3px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: #bfb8ae;
-}
-
-::selection {
-  background: rgba(124, 140, 245, 0.2);
+/* ── Utility: page container that fills dashboard main area ── */
+.page-full {
+  margin: -1.5rem;
+  height: calc(100vh - 4rem);
+  display: flex;
 }

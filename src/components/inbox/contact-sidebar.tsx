@@ -2,60 +2,42 @@
 
 import { useState, useEffect } from 'react'
 import { apiFetch } from '@/hooks/use-api'
-import { Phone, Mail, Calendar, Tag, Bot, User, X } from 'lucide-react'
+import { Phone, Mail, Calendar, Bot, User, X } from 'lucide-react'
 import { format } from 'date-fns'
 
-interface ConversationDetail {
+interface Detail {
   id: string
   status: string
   handlerType: string
   aiEnabled: boolean
   contact: {
-    id: string
-    name: string | null
-    phone: string
-    email: string | null
-    avatarUrl: string | null
-    tags: string[]
-    firstSeenAt: string
-    lastSeenAt: string
-    metadata: Record<string, any>
+    id: string; name: string | null; phone: string; email: string | null
+    avatarUrl: string | null; tags: string[]; firstSeenAt: string; lastSeenAt: string
   }
   agent: { id: string; name: string; email: string } | null
   instance: { id: string; instanceName: string; status: string } | null
 }
 
-interface Props {
-  conversationId: string
-  onClose: () => void
-}
+interface Props { conversationId: string; onClose: () => void }
 
 export function ContactSidebar({ conversationId, onClose }: Props) {
-  const [data, setData] = useState<ConversationDetail | null>(null)
+  const [data, setData] = useState<Detail | null>(null)
   const [loading, setLoading] = useState(true)
 
-  useEffect(() => {
-    loadData()
-  }, [conversationId])
+  useEffect(() => { load() }, [conversationId])
 
-  async function loadData() {
+  async function load() {
     setLoading(true)
     try {
-      const result = await apiFetch<{ conversation: ConversationDetail }>(
-        `/api/conversations/${conversationId}`
-      )
-      setData(result.conversation)
-    } catch (e) {
-      console.error('Failed to load conversation:', e)
-    } finally {
-      setLoading(false)
-    }
+      const r = await apiFetch<{ conversation: Detail }>(`/api/conversations/${conversationId}`)
+      setData(r.conversation)
+    } catch { /* empty */ } finally { setLoading(false) }
   }
 
   if (loading || !data) {
     return (
-      <div className="w-[280px] border-l border-border flex items-center justify-center">
-        <div className="w-5 h-5 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+      <div className="w-64 shrink-0 border-l border-border bg-card flex items-center justify-center">
+        <div className="w-5 h-5 border-2 border-primary/20 border-t-primary rounded-full animate-spin" />
       </div>
     )
   }
@@ -63,96 +45,74 @@ export function ContactSidebar({ conversationId, onClose }: Props) {
   const { contact } = data
 
   return (
-    <div className="w-[280px] border-l border-border overflow-y-auto">
-      {/* Header */}
-      <div className="flex items-center justify-between p-3 border-b border-border">
-        <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Contact</span>
-        <button onClick={onClose} className="p-1 rounded hover:bg-muted/50 text-muted-foreground">
-          <X className="w-3.5 h-3.5" />
-        </button>
+    <div className="w-64 shrink-0 border-l border-border bg-card overflow-y-auto">
+      {/* Head */}
+      <div className="flex items-center justify-between px-3 py-2.5 border-b border-border">
+        <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Contact</span>
+        <button onClick={onClose} className="p-1 rounded hover:bg-muted text-muted-foreground"><X className="w-3.5 h-3.5" /></button>
       </div>
 
-      {/* Contact Info */}
-      <div className="p-4 border-b border-border">
-        <div className="flex flex-col items-center text-center">
-          <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center text-xl font-semibold text-muted-foreground mb-3">
-            {contact.name?.[0]?.toUpperCase() || contact.phone.slice(-2)}
-          </div>
-          <h3 className="text-sm font-semibold text-foreground">
-            {contact.name || 'Unknown'}
-          </h3>
-          <p className="text-xs text-muted-foreground">{contact.phone}</p>
+      {/* Profile */}
+      <div className="p-4 border-b border-border text-center">
+        <div className="w-14 h-14 rounded-full bg-muted flex items-center justify-center text-lg font-semibold text-muted-foreground mx-auto mb-2">
+          {contact.name?.[0]?.toUpperCase() || contact.phone.slice(-2)}
         </div>
+        <h3 className="text-[13px] font-semibold text-foreground">{contact.name || 'Unknown'}</h3>
+        <p className="text-[12px] text-muted-foreground">{contact.phone}</p>
+      </div>
 
-        <div className="mt-4 space-y-2.5">
-          <div className="flex items-center gap-2 text-xs">
-            <Phone className="w-3.5 h-3.5 text-muted-foreground" />
-            <span className="text-foreground">{contact.phone}</span>
-          </div>
-          {contact.email && (
-            <div className="flex items-center gap-2 text-xs">
-              <Mail className="w-3.5 h-3.5 text-muted-foreground" />
-              <span className="text-foreground">{contact.email}</span>
-            </div>
-          )}
-          <div className="flex items-center gap-2 text-xs">
-            <Calendar className="w-3.5 h-3.5 text-muted-foreground" />
-            <span className="text-muted-foreground">
-              First seen {format(new Date(contact.firstSeenAt), 'dd MMM yyyy')}
-            </span>
-          </div>
-        </div>
+      {/* Details */}
+      <div className="p-4 border-b border-border space-y-2.5">
+        <Row icon={Phone} label={contact.phone} />
+        {contact.email && <Row icon={Mail} label={contact.email} />}
+        <Row icon={Calendar} label={`Since ${format(new Date(contact.firstSeenAt), 'dd MMM yyyy')}`} />
       </div>
 
       {/* Tags */}
       <div className="p-4 border-b border-border">
-        <h4 className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide mb-2">Tags</h4>
-        <div className="flex flex-wrap gap-1.5">
-          {contact.tags.length > 0 ? (
-            contact.tags.map((tag) => (
-              <span key={tag} className="text-[11px] px-2 py-0.5 bg-muted rounded-full text-muted-foreground">
-                {tag}
-              </span>
-            ))
-          ) : (
-            <span className="text-xs text-muted-foreground">No tags</span>
-          )}
+        <Label>Tags</Label>
+        <div className="flex flex-wrap gap-1 mt-1.5">
+          {contact.tags.length > 0 ? contact.tags.map(t => (
+            <span key={t} className="text-[10px] px-2 py-0.5 bg-muted rounded-full text-muted-foreground">{t}</span>
+          )) : <span className="text-[12px] text-muted-foreground">None</span>}
         </div>
       </div>
 
-      {/* Conversation Info */}
-      <div className="p-4 border-b border-border">
-        <h4 className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide mb-2">Conversation</h4>
-        <div className="space-y-2">
-          <div className="flex items-center justify-between text-xs">
-            <span className="text-muted-foreground">Status</span>
-            <span className="text-foreground capitalize">{data.status}</span>
-          </div>
-          <div className="flex items-center justify-between text-xs">
-            <span className="text-muted-foreground">Handler</span>
-            <div className="flex items-center gap-1">
-              {data.aiEnabled ? (
-                <Bot className="w-3 h-3 text-[#9b8cf5]" />
-              ) : (
-                <User className="w-3 h-3 text-[#6b9cf7]" />
-              )}
-              <span className="text-foreground capitalize">{data.handlerType}</span>
-            </div>
-          </div>
-          {data.agent && (
-            <div className="flex items-center justify-between text-xs">
-              <span className="text-muted-foreground">Agent</span>
-              <span className="text-foreground">{data.agent.name}</span>
-            </div>
-          )}
-          {data.instance && (
-            <div className="flex items-center justify-between text-xs">
-              <span className="text-muted-foreground">Instance</span>
-              <span className="text-foreground">{data.instance.instanceName}</span>
-            </div>
-          )}
+      {/* Convo info */}
+      <div className="p-4 space-y-2">
+        <Label>Conversation</Label>
+        <InfoRow label="Status" value={data.status} />
+        <div className="flex items-center justify-between text-[12px]">
+          <span className="text-muted-foreground">Handler</span>
+          <span className="flex items-center gap-1 text-foreground capitalize">
+            {data.aiEnabled ? <Bot className="w-3 h-3 text-accent-foreground" /> : <User className="w-3 h-3 text-primary" />}
+            {data.handlerType}
+          </span>
         </div>
+        {data.agent && <InfoRow label="Agent" value={data.agent.name} />}
       </div>
+    </div>
+  )
+}
+
+function Row({ icon: Icon, label }: { icon: React.ElementType; label: string }) {
+  return (
+    <div className="flex items-center gap-2 text-[12px]">
+      <Icon className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+      <span className="text-foreground truncate">{label}</span>
+    </div>
+  )
+}
+
+function Label({ children }: { children: React.ReactNode }) {
+  return <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">{children}</p>
+}
+
+function InfoRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between text-[12px]">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="text-foreground capitalize">{value}</span>
     </div>
   )
 }
