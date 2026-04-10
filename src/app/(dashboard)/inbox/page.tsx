@@ -19,16 +19,85 @@ export default function InboxPage() {
   useSSE({
     message: (data) => {
       if (data.message?.conversation?.id === selectedId) {
-        setNewMessages(prev => [...prev, data.message])
+        // SSE delivered a message for current conversation — append if not already shown
+        setNewMessages(prev => {
+          const exists = prev.some(m => m.id === data.message.id || m.whatsappMsgId === data.message.whatsappMsgId)
+          if (exists) {
+            // Update status of existing optimistic message
+            return prev.map(m =>
+              (m.whatsappMsgId && m.whatsappMsgId === data.message.whatsappMsgId) ||
+              (m._optimistic && m.body === data.message.body)
+                ? { ...data.message, _optimistic: false }
+                : m
+            )
+          }
+          return [...prev, data.message]
+        })
       }
       setRefreshKey(prev => prev + 1)
+    },
+    status_update: (data) => {
+      // Update message status (sent → delivered → read)
+      setNewMessages(prev =>
+        prev.map(m =>
+          m.whatsappMsgId === data.whatsappMsgId
+            ? { ...m, status: data.status }
+            : m
+        )
+      )
     },
     conversation_update: () => setRefreshKey(prev => prev + 1),
   })
 
   async function handleSend(body: string, isInternal: boolean) {
     if (!selectedId) return
-    await apiFetch('/api/messages', { method: 'POST', body: { conversationId: selectedId, body, isInternal } })
+
+    // 1. Optimistic insert — show immediately
+    const optimisticMsg = {
+      id: `opt-${Date.now()}`,
+      conversationId: selectedId,
+      direction: 'outbound',
+      sender: isInternal ? 'agent' : 'agent',
+      contentType: 'text',
+      body,
+      mediaUrl: null,
+      whatsappMsgId: null,
+      status: isInternal ? 'delivered' : 'sending',
+      isInternal,
+      createdAt: new Date().toISOString(),
+      _optimistic: true,
+    }
+    setNewMessages(prev => [...prev, optimisticMsg])
+
+    try {
+      // 2. Send to API
+      const result = await apiFetch<{ message: any }>('/api/messages', {
+        method: 'POST',
+        body: { conversationId: selectedId, body, isInternal },
+      })
+
+      // 3. Replace optimistic message with real one
+      if (result.message) {
+        setNewMessages(prev =>
+          prev.map(m =>
+            m.id === optimisticMsg.id
+              ? { ...result.message, _optimistic: false }
+              : m
+          )
+        )
+      }
+    } catch (error) {
+      // 4. Mark as failed
+      setNewMessages(prev =>
+        prev.map(m =>
+          m.id === optimisticMsg.id
+            ? { ...m, status: 'failed', _optimistic: false }
+            : m
+        )
+      )
+    }
+
+    setRefreshKey(prev => prev + 1)
   }
 
   async function handleToggleAI() {
@@ -45,24 +114,17 @@ export default function InboxPage() {
 
   return (
     <div className="page-full">
-      {/* Conversation list */}
       <ConversationList selectedId={selectedId} onSelect={handleSelect} refreshKey={refreshKey} />
 
-      {/* Chat area */}
       {selectedId ? (
         <div className="flex-1 flex flex-col min-w-0 border-r border-border">
-          {/* Chat header */}
           <div className="h-12 shrink-0 border-b border-border flex items-center justify-between px-4 bg-card">
             <span className="text-[13px] font-medium text-foreground">Conversation</span>
             <button onClick={() => setShowSidebar(!showSidebar)} className="p-1.5 rounded-md hover:bg-muted text-muted-foreground">
               <PanelRight className="w-4 h-4" />
             </button>
           </div>
-
-          {/* Messages */}
           <MessageThread conversationId={selectedId} newMessages={newMessages} />
-
-          {/* Input */}
           <MessageInput conversationId={selectedId} aiEnabled={aiEnabled} onSend={handleSend} onToggleAI={handleToggleAI} />
         </div>
       ) : (
@@ -77,7 +139,6 @@ export default function InboxPage() {
         </div>
       )}
 
-      {/* Contact sidebar */}
       {selectedId && showSidebar && (
         <ContactSidebar conversationId={selectedId} onClose={() => setShowSidebar(false)} />
       )}

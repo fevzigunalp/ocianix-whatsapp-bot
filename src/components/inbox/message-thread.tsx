@@ -16,6 +16,8 @@ interface Message {
   status: string
   isInternal: boolean
   createdAt: string
+  whatsappMsgId?: string | null
+  _optimistic?: boolean
 }
 
 interface Props {
@@ -24,6 +26,7 @@ interface Props {
 }
 
 const STATUS_ICON: Record<string, React.ReactNode> = {
+  sending: <Clock className="w-3 h-3 text-muted-foreground animate-pulse" />,
   pending: <Clock className="w-3 h-3 text-muted-foreground" />,
   sent: <Check className="w-3 h-3 text-muted-foreground" />,
   delivered: <CheckCheck className="w-3 h-3 text-muted-foreground" />,
@@ -41,8 +44,35 @@ export function MessageThread({ conversationId, newMessages = [] }: Props) {
   useEffect(() => {
     if (newMessages.length > 0) {
       setMessages(prev => {
-        const ids = new Set(prev.map(m => m.id))
-        return [...prev, ...newMessages.filter(m => !ids.has(m.id))]
+        let merged = [...prev]
+        for (const nm of newMessages) {
+          // Check if already exists by id
+          const idxById = merged.findIndex(m => m.id === nm.id)
+          if (idxById >= 0) {
+            // Update existing (e.g. status change)
+            merged[idxById] = { ...merged[idxById], ...nm }
+            continue
+          }
+          // Check if this replaces an optimistic message (same body + direction)
+          const idxOpt = merged.findIndex(m =>
+            m._optimistic && m.body === nm.body && m.direction === nm.direction
+          )
+          if (idxOpt >= 0) {
+            merged[idxOpt] = { ...nm, _optimistic: false }
+            continue
+          }
+          // Check by whatsappMsgId
+          if (nm.whatsappMsgId) {
+            const idxWa = merged.findIndex(m => m.whatsappMsgId === nm.whatsappMsgId)
+            if (idxWa >= 0) {
+              merged[idxWa] = { ...merged[idxWa], ...nm }
+              continue
+            }
+          }
+          // New message
+          merged.push(nm)
+        }
+        return merged
       })
     }
   }, [newMessages])
