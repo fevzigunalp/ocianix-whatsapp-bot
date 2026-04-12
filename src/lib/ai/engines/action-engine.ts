@@ -135,7 +135,37 @@ const INTERNAL_HANDLERS: Record<string, (params: any, ctx: ActionContext) => Pro
       where: { id: ctx.conversationId },
       data: { aiEnabled: false, handlerType: 'human', assignedTo: null },
     })
-    return { handed_off: true }
+    return { handed_off: true, reason: params.reason || null }
+  },
+
+  // Alias that matches the AI structured-output action name
+  escalate_to_agent: async (params, ctx) => {
+    await db.conversation.update({
+      where: { id: ctx.conversationId },
+      data: { aiEnabled: false, handlerType: 'human', assignedTo: null },
+    })
+    return { handed_off: true, reason: params.reason || null }
+  },
+
+  // Phase 2.2 — booking flow signal.
+  // The AI's own structured response already contains the "when?" question,
+  // so this handler only records state: tags the contact + opens a follow-up task.
+  request_date: async (params, ctx) => {
+    const contact = await db.contact.findUnique({ where: { id: ctx.contactId } })
+    if (contact) {
+      const tags = [...new Set([...contact.tags, 'booking_inquiry'])]
+      await db.contact.update({ where: { id: ctx.contactId }, data: { tags } })
+    }
+    const task = await db.task.create({
+      data: {
+        tenantId: ctx.tenantId,
+        title: params.topic ? `Rezervasyon tarihi bekleniyor: ${params.topic}` : 'Rezervasyon tarihi bekleniyor',
+        contactId: ctx.contactId,
+        dueAt: new Date(Date.now() + 24 * 3600 * 1000),
+        priority: 'medium',
+      },
+    })
+    return { task_id: task.id, awaiting: 'date' }
   },
 
   add_tag: async (params, ctx) => {
@@ -181,6 +211,83 @@ function validateParams(params: any, schema: any): { valid: boolean; errors: str
   }
 
   return { valid: errors.length === 0, errors }
+}
+
+// ─── Phase 2.2 — Default Action Definitions ──────────────────────
+//
+// Idempotent seeder so executeAction() can find built-in actions
+// for any tenant without requiring manual DB seeding.
+
+const DEFAULT_ACTIONS: Array<{
+  name: string
+  displayName: string
+  description: string
+  parameterSchema: Record<string, any>
+  maxExecutionsPerHour: number
+}> = [
+  {
+    name: 'request_date',
+    displayName: 'Rezervasyon tarihi iste',
+    description: 'Müşteriden rezervasyon/randevu tarihi beklendiğini işaretler',
+    parameterSchema: { type: 'object', properties: { topic: { type: 'string' } } },
+    maxExecutionsPerHour: 60,
+  },
+  {
+    name: 'create_lead',
+    displayName: 'Lead oluştur',
+    description: 'Pipeline ilk aşamasında yeni bir deal oluşturur',
+    parameterSchema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string' },
+        value: { type: 'number' },
+        currency: { type: 'string' },
+      },
+    },
+    maxExecutionsPerHour: 30,
+  },
+  {
+    name: 'escalate_to_agent',
+    displayName: 'İnsan temsilciye aktar',
+    description: 'Konuşmayı human handler’a devreder ve AI’yi kapatır',
+    parameterSchema: { type: 'object', properties: { reason: { type: 'string' } } },
+    maxExecutionsPerHour: 120,
+  },
+  {
+    name: 'handoff',
+    displayName: 'Handoff',
+    description: 'İnsan temsilciye aktarma (legacy adı)',
+    parameterSchema: { type: 'object', properties: { reason: { type: 'string' } } },
+    maxExecutionsPerHour: 120,
+  },
+]
+
+let seededTenants: Set<string> = new Set()
+
+export async function ensureDefaultActions(tenantId: string): Promise<void> {
+  if (seededTenants.has(tenantId)) return
+  for (const a of DEFAULT_ACTIONS) {
+    await db.actionDefinition.upsert({
+      where: { tenantId_name: { tenantId, name: a.name } },
+      create: {
+        tenantId,
+        name: a.name,
+        displayName: a.displayName,
+        description: a.description,
+        parameterSchema: a.parameterSchema,
+        executionType: 'internal',
+        executionConfig: { handler: a.name },
+        isEnabled: true,
+        maxExecutionsPerHour: a.maxExecutionsPerHour,
+        timeoutMs: 8000,
+        retryCount: 1,
+      },
+      update: {},
+    }).catch(err => {
+      console.error('[ActionEngine] ensureDefaultActions failed for', a.name, err.message)
+    })
+  }
+  seededTenants.add(tenantId)
 }
 
 async function logAction(

@@ -21,6 +21,7 @@ import {
   type StructuredAIResponse,
 } from './prompt-builder'
 import { evaluatePolicies } from './engines/policy-engine'
+import { executeAction, ensureDefaultActions } from './engines/action-engine'
 import { formatPhone } from '@/lib/utils'
 
 const DEBOUNCE_MS = 2000 // Wait 2s after last message before responding
@@ -143,14 +144,41 @@ export async function triggerAIResponse(input: TriggerInput): Promise<void> {
       errorMsg = `post_policy_${postCheck.policyType}`
     }
 
-    // 9. Apply confidence gate + action hook (Phase 2 — hook only, no execution)
+    // 9. Apply confidence gate + action execution (Phase 2.2)
     const actionHint = structured?.action_hint || null
-    if (actionHint) {
-      console.log(tag, 'Action hint detected (not executed):', actionHint.name, actionHint.params)
+    const threshold = context.pack?.confidenceThreshold ?? 60
+    const decision = resolveDecision(structured, status, actionHint, threshold)
+    let executedActionName: string | null = null
+
+    if (actionHint && status === 'success' && structured) {
+      const conf = structured.confidence
+      if (conf < Math.max(threshold, 60)) {
+        console.log(tag, `Action skipped (low confidence ${conf} < ${threshold}):`, actionHint.name)
+      } else {
+        const dedupKey = tenantKey(input.tenantId, 'action_done', input.messageId, actionHint.name)
+        const first = await redis.set(dedupKey, '1', 'EX', 600, 'NX')
+        if (!first) {
+          console.log(tag, 'Action skipped (duplicate):', actionHint.name)
+        } else {
+          await ensureDefaultActions(input.tenantId)
+          console.log(tag, 'Executing action:', actionHint.name, actionHint.params)
+          const result = await executeAction(actionHint.name, actionHint.params || {}, {
+            tenantId: input.tenantId,
+            conversationId: input.conversationId,
+            contactId: input.contactId,
+          })
+          console.log(tag, 'Action result:', result.status, result.error || '')
+          if (result.status === 'success') {
+            executedActionName = actionHint.name
+          } else {
+            await redis.del(dedupKey).catch(() => {})
+          }
+        }
+      }
     }
-    const decision = resolveDecision(structured, status, actionHint, context.pack?.confidenceThreshold)
-    if (decision === 'escalate' && status === 'success') {
-      // Mark conversation for human handoff so future messages bypass AI
+
+    // If decision escalates but no handoff action was executed, still flip conversation to human
+    if (decision === 'escalate' && status === 'success' && executedActionName !== 'escalate_to_agent' && executedActionName !== 'handoff') {
       await db.conversation.update({
         where: { id: input.conversationId },
         data: { handlerType: 'human', aiEnabled: false },
@@ -165,7 +193,7 @@ export async function triggerAIResponse(input: TriggerInput): Promise<void> {
       intent: structured?.intent || null,
       confidence: structured?.confidence ?? (status === 'success' ? 70 : status === 'fallback' ? 30 : 0),
       decision,
-      actionName: actionHint?.name || null,
+      actionName: executedActionName || actionHint?.name || null,
       needsInfo: structured?.needs_info || [],
     })
 
