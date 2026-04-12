@@ -1,6 +1,16 @@
 const EVOLUTION_URL = process.env.EVOLUTION_API_URL || 'http://localhost:8080'
 const EVOLUTION_KEY = process.env.EVOLUTION_API_KEY || ''
 
+/**
+ * Public URL Evolution uses to POST webhooks to this app.
+ * Prefers PUBLIC_WEBHOOK_URL so webhook traffic can be routed through a
+ * dedicated subdomain; falls back to NEXT_PUBLIC_APP_URL.
+ */
+export function publicWebhookUrl(): string {
+  const base = (process.env.PUBLIC_WEBHOOK_URL || process.env.NEXT_PUBLIC_APP_URL || '').replace(/\/+$/, '')
+  return base ? `${base}/api/webhook/evolution` : ''
+}
+
 async function evolutionFetch(path: string, options: RequestInit = {}): Promise<any> {
   const url = `${EVOLUTION_URL}${path}`
   console.log('[Evolution]', options.method || 'GET', path)

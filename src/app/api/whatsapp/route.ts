@@ -1,5 +1,5 @@
 import { db } from '@/lib/db'
-import { evolutionAPI } from '@/lib/evolution'
+import { evolutionAPI, publicWebhookUrl } from '@/lib/evolution'
 import { withAuth, withAdmin, apiSuccess, apiError, parseBody } from '@/lib/api/middleware'
 
 export const GET = withAuth(async (req, { tenantId }) => {
@@ -17,6 +17,20 @@ export const POST = withAdmin(async (req, { tenantId }) => {
   // Create in Evolution API
   const result = await evolutionAPI.createInstance(body.instanceName)
 
+  // Register the webhook so Evolution knows where to deliver events.
+  // Non-fatal — if it fails we still return the instance; /sync can retry.
+  const webhookUrl = publicWebhookUrl()
+  if (webhookUrl) {
+    try {
+      await evolutionAPI.setWebhook(body.instanceName, webhookUrl)
+      console.log('[WA] Webhook registered:', webhookUrl)
+    } catch (err: any) {
+      console.error('[WA] setWebhook failed:', err.message)
+    }
+  } else {
+    console.warn('[WA] PUBLIC_WEBHOOK_URL / NEXT_PUBLIC_APP_URL not set — skipping setWebhook')
+  }
+
   // Save to DB
   const instance = await db.whatsappInstance.create({
     data: {
@@ -25,7 +39,7 @@ export const POST = withAdmin(async (req, { tenantId }) => {
       instanceId: result?.instance?.instanceId || null,
       phoneNumber: body.phoneNumber,
       status: 'connecting',
-      webhookUrl: `${process.env.NEXT_PUBLIC_APP_URL}/api/webhook/evolution`,
+      webhookUrl,
     },
   })
 

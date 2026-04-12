@@ -1,0 +1,62 @@
+# Production overrides — merge with docker-compose.yml:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Rules:
+#  * Stateful services (postgres/redis/minio) are NOT exposed on host ports.
+#  * All secrets come from the root .env file (docker-compose loads it).
+#  * Evolution's SERVER_URL uses the public app URL so it can build proper
+#    callback URLs; override to api.yourdomain.com if you split subdomains.
+#
+# The Next.js app itself is NOT containerized here. Run it on the host
+# with `npm run build && node .next/standalone/server.js` behind Nginx,
+# or add your own image/service if you prefer. See DEPLOY.md.
+
+services:
+  postgres:
+    ports: []  # don't publish on host
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-wabot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-wabot_platform}
+
+  redis:
+    ports: []
+    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD required in .env}
+
+  minio:
+    ports:
+      - '127.0.0.1:9000:9000'  # bind to loopback only; proxy via Nginx if needed
+      - '127.0.0.1:9001:9001'
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER required}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD required}
+
+  evolution-api:
+    ports:
+      - '127.0.0.1:8080:8080'  # app reaches it via localhost:8080 on the host
+    environment:
+      SERVER_URL: ${NEXT_PUBLIC_APP_URL:?NEXT_PUBLIC_APP_URL required}
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:?EVOLUTION_API_KEY required}
+      DATABASE_ENABLED: 'true'
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://${POSTGRES_USER:-wabot}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-wabot_platform}
+      WEBSOCKET_ENABLED: 'true'
+      REDIS_ENABLED: 'true'
+      REDIS_URI: redis://:${REDIS_PASSWORD}@redis:6379
+      CACHE_REDIS_ENABLED: 'true'
+      CACHE_REDIS_URI: redis://:${REDIS_PASSWORD}@redis:6379
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://localhost:8080 >/dev/null || exit 1']
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  n8n:
+    ports:
+      - '127.0.0.1:5678:5678'  # front via Nginx + basic auth
+    environment:
+      N8N_BASIC_AUTH_ACTIVE: 'true'
+      N8N_BASIC_AUTH_USER: ${N8N_USER:-admin}
+      N8N_BASIC_AUTH_PASSWORD: ${N8N_PASSWORD:?N8N_PASSWORD required}
+      WEBHOOK_URL: ${N8N_PUBLIC_URL:-https://n8n.yourdomain.com}

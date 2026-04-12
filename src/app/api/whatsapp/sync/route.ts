@@ -1,5 +1,5 @@
 import { db } from '@/lib/db'
-import { evolutionAPI } from '@/lib/evolution'
+import { evolutionAPI, publicWebhookUrl } from '@/lib/evolution'
 import { withAuth, apiSuccess, apiError } from '@/lib/api/middleware'
 
 /**
@@ -34,7 +34,21 @@ export const POST = withAuth(async (req, { tenantId }) => {
             lastConnectedAt: evoInst.status === 'connected' ? new Date() : dbInst.lastConnectedAt,
           },
         })
-        results.push({ name: updated.instanceName, status: updated.status, phone: updated.phoneNumber, synced: true })
+        // Re-apply webhook so Evolution always points at our current public URL
+        const hook = publicWebhookUrl()
+        let webhookSet = false
+        if (hook) {
+          try {
+            await evolutionAPI.setWebhook(updated.instanceName, hook)
+            webhookSet = true
+            if (updated.webhookUrl !== hook) {
+              await db.whatsappInstance.update({ where: { id: updated.id }, data: { webhookUrl: hook } })
+            }
+          } catch (err: any) {
+            console.error('[Sync] setWebhook failed for', updated.instanceName, err.message)
+          }
+        }
+        results.push({ name: updated.instanceName, status: updated.status, phone: updated.phoneNumber, synced: true, webhookSet })
       } else {
         // Instance exists in DB but not in Evolution — mark disconnected
         await db.whatsappInstance.update({
