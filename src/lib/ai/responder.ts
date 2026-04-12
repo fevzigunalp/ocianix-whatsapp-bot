@@ -22,6 +22,7 @@ import {
 } from './prompt-builder'
 import { evaluatePolicies } from './engines/policy-engine'
 import { executeAction, ensureDefaultActions } from './engines/action-engine'
+import { retrieveKnowledge } from './engines/knowledge-engine'
 import { formatPhone } from '@/lib/utils'
 
 const DEBOUNCE_MS = 2000 // Wait 2s after last message before responding
@@ -104,8 +105,29 @@ export async function triggerAIResponse(input: TriggerInput): Promise<void> {
       }
     }
 
-    // 6. Build prompt (Phase 2: structured output)
-    const systemPrompt = buildStructuredSystemPrompt(context.pack, context.conversation)
+    // 6a. Knowledge retrieval (Phase 2.3 — RAG grounding)
+    const knowledge = await retrieveKnowledge(input.messageBody, input.tenantId, 5).catch(err => {
+      console.error(tag, 'Knowledge retrieval failed:', err.message)
+      return []
+    })
+    const snippets = knowledge.map(k => ({
+      id: k.id,
+      kind: (k.category === 'faq' ? 'faq' : 'chunk') as 'faq' | 'chunk',
+      title: k.pageTitle,
+      content: k.content,
+      score: k.finalScore,
+    }))
+    const sourcesUsed = knowledge.map(k => k.pageTitle || k.source.sourceName).filter(Boolean) as string[]
+    const faqIds = snippets.filter(s => s.kind === 'faq').map(s => s.id)
+    const chunkIds = snippets.filter(s => s.kind === 'chunk').map(s => s.id)
+    if (snippets.length > 0) {
+      console.log(tag, `Knowledge: ${faqIds.length} FAQ + ${chunkIds.length} chunks (top score ${snippets[0].score?.toFixed(2)})`)
+    } else {
+      console.log(tag, 'Knowledge: no matches — strict grounding mode')
+    }
+
+    // 6b. Build prompt (Phase 2: structured output + grounded facts)
+    const systemPrompt = buildStructuredSystemPrompt(context.pack, context.conversation, snippets)
     const messages = buildMessages(context.conversation, input.messageBody)
 
     // 7. Call AI
@@ -195,6 +217,9 @@ export async function triggerAIResponse(input: TriggerInput): Promise<void> {
       decision,
       actionName: executedActionName || actionHint?.name || null,
       needsInfo: structured?.needs_info || [],
+      sourcesUsed,
+      faqIdsUsed: faqIds,
+      chunkIdsUsed: chunkIds,
     })
 
     // 9. Release lock
@@ -348,6 +373,9 @@ interface LogExtras {
   decision?: string
   actionName?: string | null
   needsInfo?: string[]
+  sourcesUsed?: string[]
+  faqIdsUsed?: string[]
+  chunkIdsUsed?: string[]
 }
 
 async function logAIResult(
@@ -373,13 +401,16 @@ async function logAIResult(
         outputTokens: aiResult?.outputTokens || null,
         latencyMs: aiResult?.latencyMs || null,
         packVersion,
-        sourcesUsed: [],
+        sourcesUsed: extras.sourcesUsed || [],
         metadata: {
           status,
           model: aiResult?.model || null,
           errorMessage,
           replyLength: replyText.length,
           needsInfo: extras.needsInfo || [],
+          faqIdsUsed: extras.faqIdsUsed || [],
+          chunkIdsUsed: extras.chunkIdsUsed || [],
+          knowledgeCount: (extras.faqIdsUsed?.length || 0) + (extras.chunkIdsUsed?.length || 0),
         },
       },
     })

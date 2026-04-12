@@ -155,16 +155,55 @@ Rules:
 - Set action_hint only when the conversation clearly warrants it (booking → request_date, qualified lead → create_lead, frustrated/legal/refund → escalate_to_agent).
 - If the customer's request is outside scope or data, set intent to "off_topic" or "unclear" and ask ONE clarifying question in "response".`
 
+export interface KnowledgeSnippet {
+  id: string
+  kind: 'faq' | 'chunk'
+  title?: string | null
+  content: string
+  score?: number
+}
+
 export function buildStructuredSystemPrompt(
   pack: PackContext | null,
   conversation: ConversationContext,
-  knowledgeSnippets?: string[],
+  knowledgeSnippets?: KnowledgeSnippet[] | string[],
 ): string {
   let base = buildSystemPrompt(pack, conversation)
-  if (knowledgeSnippets && knowledgeSnippets.length > 0) {
-    base += `\n\nKNOWN FACTS (use only these for business-specific answers; if a fact is not here, say you'll check):\n- ${knowledgeSnippets.slice(0, 6).join('\n- ')}`
-  }
+  base += '\n\n' + buildKnowledgeSection(knowledgeSnippets)
   return base + '\n' + STRUCTURED_INSTRUCTIONS
+}
+
+function buildKnowledgeSection(snippets?: KnowledgeSnippet[] | string[]): string {
+  if (!snippets || snippets.length === 0) {
+    return `KNOWN FACTS:
+(none retrieved for this message)
+
+GROUNDING RULE — STRICT:
+- You have no verified business facts for this question.
+- Do NOT invent prices, hours, addresses, policies, availability, or product details.
+- Answer only from what is obviously public/general (e.g. greetings, small talk) OR acknowledge the limit and offer to have a colleague follow up.
+- Lower your confidence accordingly (typically 40-60).`
+  }
+
+  const normalized: KnowledgeSnippet[] = (snippets as any[]).map((s, i) => {
+    if (typeof s === 'string') return { id: `k${i}`, kind: 'chunk', content: s }
+    return s
+  })
+
+  const lines = normalized.slice(0, 6).map(s => {
+    const tag = s.kind === 'faq' ? 'FAQ' : 'DOC'
+    const label = s.title ? ` — ${s.title}` : ''
+    return `[${tag}#${s.id}${label}] ${s.content.replace(/\s+/g, ' ').trim()}`
+  })
+
+  return `KNOWN FACTS (retrieved from this business's verified knowledge base):
+${lines.join('\n')}
+
+GROUNDING RULE — STRICT:
+- Prefer these facts over prior knowledge. If a fact above answers the question, use it verbatim in meaning.
+- Do NOT invent details not grounded in these facts (prices, hours, stock, addresses, policies, promotions).
+- If the facts are not sufficient, say you'll check and offer to have a colleague follow up — don't guess.
+- Keep confidence high (>80) only when the answer is directly supported by a fact above; otherwise lower confidence.`
 }
 
 export interface StructuredAIResponse {
