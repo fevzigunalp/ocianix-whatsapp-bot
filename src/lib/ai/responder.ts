@@ -22,7 +22,7 @@ import {
 } from './prompt-builder'
 import { evaluatePolicies } from './engines/policy-engine'
 import { executeAction, ensureDefaultActions } from './engines/action-engine'
-import { retrieveKnowledge } from './engines/knowledge-engine'
+import { retrieveKnowledgeWithMeta } from './engines/knowledge-engine'
 import { formatPhone } from '@/lib/utils'
 
 const DEBOUNCE_MS = 2000 // Wait 2s after last message before responding
@@ -105,11 +105,14 @@ export async function triggerAIResponse(input: TriggerInput): Promise<void> {
       }
     }
 
-    // 6a. Knowledge retrieval (Phase 2.3 — RAG grounding)
-    const knowledge = await retrieveKnowledge(input.messageBody, input.tenantId, 5).catch(err => {
+    // 6a. Knowledge retrieval (Phase 2.3/2.4 — vector-first RAG)
+    const retrieval = await retrieveKnowledgeWithMeta(input.messageBody, input.tenantId, 5).catch(err => {
       console.error(tag, 'Knowledge retrieval failed:', err.message)
-      return []
+      return { chunks: [], meta: { type: 'none' as const, scores: [] } }
     })
+    const knowledge = retrieval.chunks
+    const retrievalType = retrieval.meta.type
+    const similarityScores = retrieval.meta.scores
     const snippets = knowledge.map(k => ({
       id: k.id,
       kind: (k.category === 'faq' ? 'faq' : 'chunk') as 'faq' | 'chunk',
@@ -121,9 +124,9 @@ export async function triggerAIResponse(input: TriggerInput): Promise<void> {
     const faqIds = snippets.filter(s => s.kind === 'faq').map(s => s.id)
     const chunkIds = snippets.filter(s => s.kind === 'chunk').map(s => s.id)
     if (snippets.length > 0) {
-      console.log(tag, `Knowledge: ${faqIds.length} FAQ + ${chunkIds.length} chunks (top score ${snippets[0].score?.toFixed(2)})`)
+      console.log(tag, `Knowledge[${retrievalType}]: ${faqIds.length} FAQ + ${chunkIds.length} chunks (top sim ${similarityScores[0]?.toFixed(3)})`)
     } else {
-      console.log(tag, 'Knowledge: no matches — strict grounding mode')
+      console.log(tag, `Knowledge[${retrievalType}]: no matches — strict grounding mode`)
     }
 
     // 6b. Build prompt (Phase 2: structured output + grounded facts)
@@ -220,6 +223,8 @@ export async function triggerAIResponse(input: TriggerInput): Promise<void> {
       sourcesUsed,
       faqIdsUsed: faqIds,
       chunkIdsUsed: chunkIds,
+      retrievalType,
+      similarityScores,
     })
 
     // 9. Release lock
@@ -376,6 +381,8 @@ interface LogExtras {
   sourcesUsed?: string[]
   faqIdsUsed?: string[]
   chunkIdsUsed?: string[]
+  retrievalType?: 'vector' | 'text' | 'none'
+  similarityScores?: number[]
 }
 
 async function logAIResult(
@@ -411,6 +418,8 @@ async function logAIResult(
           faqIdsUsed: extras.faqIdsUsed || [],
           chunkIdsUsed: extras.chunkIdsUsed || [],
           knowledgeCount: (extras.faqIdsUsed?.length || 0) + (extras.chunkIdsUsed?.length || 0),
+          retrievalType: extras.retrievalType || 'none',
+          similarityScores: extras.similarityScores || [],
         },
       },
     })
