@@ -30,8 +30,16 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
-.env*
+# env files (secrets never committed; template is the exception)
+.env
+.env.*
+!.env.example
+
+# local artifacts / WSL junk
+/platform.zip
+*.zip
+*.tar.gz
+*.log
 
 # vercel
 .vercel
