@@ -23,6 +23,7 @@ import {
 import { evaluatePolicies } from './engines/policy-engine'
 import { executeAction, ensureDefaultActions } from './engines/action-engine'
 import { retrieveKnowledgeWithMeta } from './engines/knowledge-engine'
+import { validateResponse, buildStrictCorrection, type FaithfulnessResult } from './faithfulness-check'
 import { formatPhone } from '@/lib/utils'
 
 const DEBOUNCE_MS = 2000 // Wait 2s after last message before responding
@@ -169,6 +170,54 @@ export async function triggerAIResponse(input: TriggerInput): Promise<void> {
       errorMsg = `post_policy_${postCheck.policyType}`
     }
 
+    // 8b. Faithfulness guardrail (Phase 2.7) — only inspect genuine AI replies
+    let faithfulness: FaithfulnessResult = { pass: true, violations: [], unsupportedNumbers: [], unsupportedUrls: [], unsupportedPhones: [] }
+    let retried = false
+    if (status === 'success' && structured) {
+      const sourceTexts = knowledge.map(k => k.content)
+      faithfulness = validateResponse(replyText, sourceTexts)
+      if (!faithfulness.pass) {
+        console.log(tag, 'Faithfulness FAIL:', faithfulness.violations, {
+          n: faithfulness.unsupportedNumbers, u: faithfulness.unsupportedUrls, p: faithfulness.unsupportedPhones,
+        })
+        // One strict retry with correction addendum
+        retried = true
+        const correctedPrompt = systemPrompt + '\n\n' + buildStrictCorrection(faithfulness)
+        const retryResult = await callAI(correctedPrompt, messages)
+        const retryStructured = retryResult && retryResult.text.trim() ? parseStructuredResponse(retryResult.text) : null
+        const retryText = retryStructured?.response || retryResult?.text?.trim() || ''
+        if (retryText) {
+          const retryCheck = validateResponse(retryText, sourceTexts)
+          if (retryCheck.pass) {
+            replyText = retryText
+            structured = retryStructured || structured
+            faithfulness = retryCheck
+            console.log(tag, 'Faithfulness retry OK')
+          } else {
+            // Still unsafe → escalate with canned reply and human handoff
+            console.log(tag, 'Faithfulness retry FAIL → escalate')
+            faithfulness = retryCheck
+            replyText = 'Bu bilgiyi kontrol edip en kısa sürede bir temsilcimiz sizi arayacak. Tesekkurler.'
+            status = 'fallback'
+            errorMsg = 'faithfulness_violation'
+            await db.conversation.update({
+              where: { id: input.conversationId },
+              data: { handlerType: 'human', aiEnabled: false },
+            }).catch(() => {})
+          }
+        } else {
+          console.log(tag, 'Faithfulness retry empty → escalate')
+          replyText = 'Bu bilgiyi kontrol edip en kısa sürede bir temsilcimiz sizi arayacak. Tesekkurler.'
+          status = 'fallback'
+          errorMsg = 'faithfulness_retry_empty'
+          await db.conversation.update({
+            where: { id: input.conversationId },
+            data: { handlerType: 'human', aiEnabled: false },
+          }).catch(() => {})
+        }
+      }
+    }
+
     // 9. Apply confidence gate + action execution (Phase 2.2)
     const actionHint = structured?.action_hint || null
     const threshold = context.pack?.confidenceThreshold ?? 60
@@ -225,6 +274,9 @@ export async function triggerAIResponse(input: TriggerInput): Promise<void> {
       chunkIdsUsed: chunkIds,
       retrievalType,
       similarityScores,
+      faithfulnessPass: faithfulness.pass,
+      faithfulnessViolations: faithfulness.violations,
+      faithfulnessRetried: retried,
     })
 
     // 9. Release lock
@@ -383,6 +435,9 @@ interface LogExtras {
   chunkIdsUsed?: string[]
   retrievalType?: 'vector' | 'text' | 'none'
   similarityScores?: number[]
+  faithfulnessPass?: boolean
+  faithfulnessViolations?: string[]
+  faithfulnessRetried?: boolean
 }
 
 async function logAIResult(
@@ -420,6 +475,9 @@ async function logAIResult(
           knowledgeCount: (extras.faqIdsUsed?.length || 0) + (extras.chunkIdsUsed?.length || 0),
           retrievalType: extras.retrievalType || 'none',
           similarityScores: extras.similarityScores || [],
+          faithfulnessPass: extras.faithfulnessPass ?? true,
+          faithfulnessViolations: extras.faithfulnessViolations || [],
+          faithfulnessRetried: extras.faithfulnessRetried ?? false,
         },
       },
     })
