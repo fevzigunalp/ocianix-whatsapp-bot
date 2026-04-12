@@ -12,7 +12,7 @@ All of these go into `platform/.env`. Template: `.env.example`.
 |---|---|---|
 | `DATABASE_URL` | `postgresql://wabot:***@postgres:5432/wabot_platform` | Must point at the pgvector-enabled Postgres |
 | `AUTH_SECRET` | `openssl rand -base64 32` | NextAuth JWT secret |
-| `AUTH_URL` / `NEXTAUTH_URL` | `https://app.yourdomain.com` | **HTTPS** canonical URL |
+| `AUTH_URL` / `NEXTAUTH_URL` | `https://bot.ocianix.com` | **HTTPS** canonical URL |
 | `REDIS_URL` | `redis://:***@redis:6379` | Password required in prod |
 | `MINIO_ENDPOINT` / `_PORT` / `_ACCESS_KEY` / `_SECRET_KEY` / `_BUCKET` | `minio` / `9000` / ... | |
 | `EVOLUTION_API_URL` | `http://127.0.0.1:8080` | App → Evolution (private, loopback only) |
@@ -23,8 +23,8 @@ All of these go into `platform/.env`. Template: `.env.example`.
 | `EVOLUTION_API_KEY` | `***` | Must match Evolution's `AUTHENTICATION_API_KEY` |
 | `ANTHROPIC_API_KEY` | `sk-ant-...` | Required for AI replies |
 | `OPENAI_API_KEY` | `sk-...` | Optional — enables vector retrieval |
-| `NEXT_PUBLIC_APP_URL` | `https://app.yourdomain.com` | Used in UI and links |
-| `PUBLIC_WEBHOOK_URL` | `https://app.yourdomain.com` | URL Evolution POSTs webhooks to; defaults to `NEXT_PUBLIC_APP_URL` |
+| `NEXT_PUBLIC_APP_URL` | `https://bot.ocianix.com` | Used in UI and links |
+| `PUBLIC_WEBHOOK_URL` | `https://bot.ocianix.com` | URL Evolution POSTs webhooks to; defaults to `NEXT_PUBLIC_APP_URL` |
 | `NODE_ENV` | `production` | |
 | `PORT` | `3001` | Port Next.js listens on |
 
@@ -34,10 +34,10 @@ All of these go into `platform/.env`. Template: `.env.example`.
 
 | Host | Purpose |
 |---|---|
-| `app.yourdomain.com` | The Next.js app (UI + API + `/api/webhook/evolution`) |
-| `api.yourdomain.com` | *(Optional)* If you want webhooks on a separate subdomain, set `PUBLIC_WEBHOOK_URL=https://api.yourdomain.com` and proxy it to the same Next.js backend |
-| `n8n.yourdomain.com` | *(Optional)* n8n UI, basic-auth protected |
-| `status.yourdomain.com` | *(Optional)* Uptime Kuma |
+| `bot.ocianix.com` | The Next.js app (UI + API + `/api/webhook/evolution`) |
+| `api.ocianix.com` | *(Optional)* If you want webhooks on a separate subdomain, set `PUBLIC_WEBHOOK_URL=https://api.ocianix.com` and proxy it to the same Next.js backend |
+| `n8n.ocianix.com` | *(Optional)* n8n UI, basic-auth protected |
+| `status.ocianix.com` | *(Optional)* Uptime Kuma |
 
 All must have TLS. Evolution API, Postgres, Redis, and MinIO are **not** public — they stay on loopback or the internal Docker network.
 
@@ -94,7 +94,7 @@ Install the canonical Nginx vhost from `deploy/nginx.conf.example`:
 sudo cp deploy/nginx.conf.example /etc/nginx/sites-available/wabot
 sudo ln -s /etc/nginx/sites-available/wabot /etc/nginx/sites-enabled/
 sudo nginx -t && sudo systemctl reload nginx
-sudo certbot --nginx -d app.yourdomain.com
+sudo certbot --nginx -d bot.ocianix.com
 ```
 The vhost ships with the SSE-safe `/api/sse` block (`proxy_buffering off`,
 `proxy_read_timeout 1h`) and a separate `/api/webhook/` block.
@@ -114,7 +114,7 @@ curl -s -H "apikey: $EVOLUTION_API_KEY" http://127.0.0.1:8080/webhook/find/<inst
 # → should list MESSAGES_UPSERT etc with the public URL
 ```
 
-If Evolution lives on a different public subdomain, set `PUBLIC_WEBHOOK_URL=https://api.yourdomain.com` and re-sync.
+If Evolution lives on a different public subdomain, set `PUBLIC_WEBHOOK_URL=https://api.ocianix.com` and re-sync.
 
 ---
 
@@ -134,8 +134,8 @@ MinIO data lives in the `miniodata` volume — snapshot the volume or mirror to 
 
 Run through all of these. Every one must pass before inviting real users.
 
-- [ ] `curl -s https://app.yourdomain.com/api/health | jq` → `{status:"ok", checks:{database:{ok:true}, redis:{ok:true}}}`
-- [ ] Login at `https://app.yourdomain.com/login` with seeded admin works
+- [ ] `curl -s https://bot.ocianix.com/api/health | jq` → `{status:"ok", checks:{database:{ok:true}, redis:{ok:true}}}`
+- [ ] Login at `https://bot.ocianix.com/login` with seeded admin works
 - [ ] `/dashboard` loads, sidebar renders, no console errors
 - [ ] Inbox opens an existing conversation, SSE connects (DevTools → Network → `/api/sse` stays pending)
 - [ ] Create a WhatsApp instance from the UI → QR shows → scan → status flips to `connected` within ~20s

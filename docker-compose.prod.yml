@@ -6,7 +6,7 @@
 #  * Stateful services (postgres/redis/minio) are NOT exposed on host ports.
 #  * All secrets come from the root .env file (docker-compose loads it).
 #  * Evolution's SERVER_URL uses the public app URL so it can build proper
-#    callback URLs; override to api.yourdomain.com if you split subdomains.
+#    callback URLs; override to api.ocianix.com if you split subdomains.
 #
 # The Next.js app itself is NOT containerized here. Run it on the host
 # with `npm run build && node .next/standalone/server.js` behind Nginx,
@@ -59,4 +59,4 @@ services:
       N8N_BASIC_AUTH_ACTIVE: 'true'
       N8N_BASIC_AUTH_USER: ${N8N_USER:-admin}
       N8N_BASIC_AUTH_PASSWORD: ${N8N_PASSWORD:?N8N_PASSWORD required}
-      WEBHOOK_URL: ${N8N_PUBLIC_URL:-https://n8n.yourdomain.com}
+      WEBHOOK_URL: ${N8N_PUBLIC_URL:-https://n8n.ocianix.com}

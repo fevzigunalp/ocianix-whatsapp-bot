@@ -3,9 +3,9 @@
 #   sudo cp deploy/nginx.conf.example /etc/nginx/sites-available/wabot
 #   sudo ln -s /etc/nginx/sites-available/wabot /etc/nginx/sites-enabled/
 #   sudo nginx -t && sudo systemctl reload nginx
-#   sudo certbot --nginx -d app.yourdomain.com
+#   sudo certbot --nginx -d bot.ocianix.com
 #
-# Replace app.yourdomain.com with your real host.
+# Replace bot.ocianix.com with your real host.
 
 upstream wabot_app {
     server 127.0.0.1:3001;
@@ -16,7 +16,7 @@ upstream wabot_app {
 server {
     listen 80;
     listen [::]:80;
-    server_name app.yourdomain.com;
+    server_name bot.ocianix.com;
     return 301 https://$host$request_uri;
 }
 
@@ -24,11 +24,11 @@ server {
 server {
     listen 443 ssl http2;
     listen [::]:443 ssl http2;
-    server_name app.yourdomain.com;
+    server_name bot.ocianix.com;
 
     # TLS — filled in by certbot
-    # ssl_certificate     /etc/letsencrypt/live/app.yourdomain.com/fullchain.pem;
-    # ssl_certificate_key /etc/letsencrypt/live/app.yourdomain.com/privkey.pem;
+    # ssl_certificate     /etc/letsencrypt/live/bot.ocianix.com/fullchain.pem;
+    # ssl_certificate_key /etc/letsencrypt/live/bot.ocianix.com/privkey.pem;
 
     client_max_body_size 20m;
     proxy_http_version 1.1;
