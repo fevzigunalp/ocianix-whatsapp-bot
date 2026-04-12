@@ -75,12 +75,12 @@ export function buildSystemPrompt(
   // Safety rules
   parts.push(`
 IMPORTANT RULES:
-- Only answer based on what you know about this business.
-- If you don't have specific information, say so honestly. Suggest the customer contact a representative for details.
-- Never invent prices, dates, or facts you don't know.
-- Never share competitor information.
-- If the customer seems upset or mentions legal issues, politely offer to connect them with a human representative.
-- If you cannot help after 2 attempts, suggest human assistance.`)
+- Only answer based on verified information about this business. If unsure, say so.
+- Never invent prices, dates, stock, addresses, hours, or policies. If the fact is not given to you, state that you will check and have a colleague follow up.
+- Never share competitor information or speculate about third parties.
+- If the customer is upset, mentions legal issues, asks for a refund, or requests a human, offer to connect them to a representative.
+- Prefer ONE focused question over multiple. Never ask more than one question per message.
+- Keep answers tight. Avoid filler, apologies, and restating the question.`)
 
   // Contact context
   if (conversation.contactName) {
@@ -129,4 +129,70 @@ export function buildMessages(
   }
 
   return merged
+}
+
+// ─── Phase 2: Structured Output ──────────────────────────────────
+//
+// Request AI to return a JSON envelope so we can route on intent,
+// confidence, and suggested actions — without losing plain-text UX.
+
+const STRUCTURED_INSTRUCTIONS = `
+RESPONSE FORMAT — STRICT:
+Reply ONLY with a single JSON object, no prose before or after. Schema:
+{
+  "intent": "info" | "booking" | "pricing" | "complaint" | "greeting" | "unclear" | "off_topic" | "handoff_request",
+  "confidence": 0-100,
+  "response": "the exact message to send to the customer (same language as customer, obeying tone/length rules)",
+  "action_hint": null | {
+    "name": "create_lead" | "request_date" | "escalate_to_agent",
+    "params": { ...relevant fields you were able to gather (name, phone, date, topic, reason) }
+  },
+  "needs_info": [] | ["name" | "phone" | "email" | "date" | "topic"]
+}
+Rules:
+- "response" must NOT contain the JSON itself. Keep it natural.
+- Set confidence honestly: low (<50) when you are unsure or lack info; high (>80) only for clear, well-grounded answers.
+- Set action_hint only when the conversation clearly warrants it (booking → request_date, qualified lead → create_lead, frustrated/legal/refund → escalate_to_agent).
+- If the customer's request is outside scope or data, set intent to "off_topic" or "unclear" and ask ONE clarifying question in "response".`
+
+export function buildStructuredSystemPrompt(
+  pack: PackContext | null,
+  conversation: ConversationContext,
+  knowledgeSnippets?: string[],
+): string {
+  let base = buildSystemPrompt(pack, conversation)
+  if (knowledgeSnippets && knowledgeSnippets.length > 0) {
+    base += `\n\nKNOWN FACTS (use only these for business-specific answers; if a fact is not here, say you'll check):\n- ${knowledgeSnippets.slice(0, 6).join('\n- ')}`
+  }
+  return base + '\n' + STRUCTURED_INSTRUCTIONS
+}
+
+export interface StructuredAIResponse {
+  intent: string
+  confidence: number
+  response: string
+  action_hint: { name: string; params: Record<string, any> } | null
+  needs_info: string[]
+}
+
+export function parseStructuredResponse(raw: string): StructuredAIResponse | null {
+  if (!raw) return null
+  // Find first {...} block tolerantly
+  const match = raw.match(/\{[\s\S]*\}/)
+  if (!match) return null
+  try {
+    const obj = JSON.parse(match[0])
+    if (typeof obj.response !== 'string' || !obj.response.trim()) return null
+    return {
+      intent: typeof obj.intent === 'string' ? obj.intent : 'unclear',
+      confidence: typeof obj.confidence === 'number' ? Math.max(0, Math.min(100, obj.confidence)) : 50,
+      response: obj.response.trim(),
+      action_hint: obj.action_hint && typeof obj.action_hint.name === 'string'
+        ? { name: obj.action_hint.name, params: obj.action_hint.params || {} }
+        : null,
+      needs_info: Array.isArray(obj.needs_info) ? obj.needs_info.filter((x: any) => typeof x === 'string') : [],
+    }
+  } catch {
+    return null
+  }
 }

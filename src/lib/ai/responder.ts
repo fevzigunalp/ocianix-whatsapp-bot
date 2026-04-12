@@ -14,7 +14,13 @@ import { redis, tenantKey } from '@/lib/redis'
 import { evolutionAPI } from '@/lib/evolution'
 import { publishSSE } from '@/lib/sse'
 import { callAI, type AIResponse } from './provider'
-import { buildSystemPrompt, buildMessages } from './prompt-builder'
+import {
+  buildStructuredSystemPrompt,
+  buildMessages,
+  parseStructuredResponse,
+  type StructuredAIResponse,
+} from './prompt-builder'
+import { evaluatePolicies } from './engines/policy-engine'
 import { formatPhone } from '@/lib/utils'
 
 const DEBOUNCE_MS = 2000 // Wait 2s after last message before responding
@@ -79,21 +85,48 @@ export async function triggerAIResponse(input: TriggerInput): Promise<void> {
       return
     }
 
-    // 5. Build prompt
-    const systemPrompt = buildSystemPrompt(context.pack, context.conversation)
+    // 5. PRE-RESPONSE POLICY CHECK (Phase 2)
+    const preCheck = await evaluatePolicies(input.messageBody, 'pre_response', null, input.tenantId)
+    if (preCheck.outcome !== 'pass') {
+      console.log(tag, 'Policy pre-check:', preCheck.outcome, preCheck.policyType)
+      const override = await handlePolicyOutcome(input, preCheck, tag)
+      if (override.handled) {
+        await logAIResult(
+          input, null, override.replyText,
+          override.outcome === 'escalate' ? 'error' : 'fallback',
+          `policy_${preCheck.policyType}`, context.packVersion,
+          { intent: 'POLICY', confidence: 95, decision: override.outcome, actionName: override.actionName }
+        )
+        await redis.del(lockKey)
+        console.log(tag, 'Done (policy)')
+        return
+      }
+    }
+
+    // 6. Build prompt (Phase 2: structured output)
+    const systemPrompt = buildStructuredSystemPrompt(context.pack, context.conversation)
     const messages = buildMessages(context.conversation, input.messageBody)
 
-    // 6. Call AI
+    // 7. Call AI
     const aiResult = await callAI(systemPrompt, messages)
 
     let replyText: string
     let status: 'success' | 'fallback' | 'error'
     let errorMsg: string | null = null
+    let structured: StructuredAIResponse | null = null
 
     if (aiResult && aiResult.text.trim()) {
-      replyText = aiResult.text.trim()
-      status = 'success'
-      console.log(tag, 'AI replied:', replyText.substring(0, 80))
+      structured = parseStructuredResponse(aiResult.text)
+      if (structured) {
+        replyText = structured.response
+        status = 'success'
+        console.log(tag, `AI [${structured.intent} ${structured.confidence}%]:`, replyText.substring(0, 80))
+      } else {
+        // Model didn't follow JSON format — use raw text as fallback so user still gets a reply
+        replyText = aiResult.text.trim()
+        status = 'success'
+        console.log(tag, 'AI (unstructured):', replyText.substring(0, 80))
+      }
     } else {
       replyText = FALLBACK_REPLY
       status = aiResult ? 'fallback' : 'error'
@@ -101,11 +134,40 @@ export async function triggerAIResponse(input: TriggerInput): Promise<void> {
       console.log(tag, 'Using fallback:', errorMsg)
     }
 
-    // 7. Send reply via existing outbound pipeline
+    // 8. POST-RESPONSE POLICY CHECK (Phase 2)
+    const postCheck = await evaluatePolicies(input.messageBody, 'post_response', replyText, input.tenantId)
+    if (postCheck.outcome === 'block') {
+      console.log(tag, 'Policy post-check blocked response')
+      replyText = postCheck.responseOverride || FALLBACK_REPLY
+      status = 'fallback'
+      errorMsg = `post_policy_${postCheck.policyType}`
+    }
+
+    // 9. Apply confidence gate + action hook (Phase 2 — hook only, no execution)
+    const actionHint = structured?.action_hint || null
+    if (actionHint) {
+      console.log(tag, 'Action hint detected (not executed):', actionHint.name, actionHint.params)
+    }
+    const decision = resolveDecision(structured, status, actionHint, context.pack?.confidenceThreshold)
+    if (decision === 'escalate' && status === 'success') {
+      // Mark conversation for human handoff so future messages bypass AI
+      await db.conversation.update({
+        where: { id: input.conversationId },
+        data: { handlerType: 'human', aiEnabled: false },
+      }).catch(() => {})
+    }
+
+    // 10. Send reply via existing outbound pipeline
     await sendReply(input, replyText, tag)
 
-    // 8. Log
-    await logAIResult(input, aiResult, replyText, status, errorMsg, context.packVersion)
+    // 11. Log with intent/decision/action
+    await logAIResult(input, aiResult, replyText, status, errorMsg, context.packVersion, {
+      intent: structured?.intent || null,
+      confidence: structured?.confidence ?? (status === 'success' ? 70 : status === 'fallback' ? 30 : 0),
+      decision,
+      actionName: actionHint?.name || null,
+      needsInfo: structured?.needs_info || [],
+    })
 
     // 9. Release lock
     await redis.del(lockKey)
@@ -180,6 +242,7 @@ async function loadContext(input: TriggerInput) {
       maxResponseLen: pack.maxResponseLen,
       customInstructions: pack.customInstructions,
       language: pack.language,
+      confidenceThreshold: pack.confidenceThreshold,
     } : null,
     conversation: {
       contactName: contact?.name || null,
@@ -251,6 +314,14 @@ async function sendReply(input: TriggerInput, text: string, tag: string) {
 
 // ─── Logging ───────────────────────────────────────────────────
 
+interface LogExtras {
+  intent?: string | null
+  confidence?: number
+  decision?: string
+  actionName?: string | null
+  needsInfo?: string[]
+}
+
 async function logAIResult(
   input: TriggerInput,
   aiResult: AIResponse | null,
@@ -258,6 +329,7 @@ async function logAIResult(
   status: 'success' | 'fallback' | 'error',
   errorMessage: string | null,
   packVersion: number | null,
+  extras: LogExtras = {},
 ) {
   try {
     await db.aiLog.create({
@@ -265,10 +337,10 @@ async function logAIResult(
         tenantId: input.tenantId,
         conversationId: input.conversationId,
         messageId: input.messageId,
-        intent: null, // v1 doesn't classify intent
-        confidence: status === 'success' ? 80 : status === 'fallback' ? 30 : 0,
-        decision: status === 'success' ? 'answer' : status === 'fallback' ? 'answer' : 'escalate',
-        actionName: null,
+        intent: extras.intent ?? null,
+        confidence: extras.confidence ?? (status === 'success' ? 70 : status === 'fallback' ? 30 : 0),
+        decision: extras.decision ?? (status === 'success' ? 'answer' : status === 'fallback' ? 'answer' : 'escalate'),
+        actionName: extras.actionName ?? null,
         inputTokens: aiResult?.inputTokens || null,
         outputTokens: aiResult?.outputTokens || null,
         latencyMs: aiResult?.latencyMs || null,
@@ -279,6 +351,7 @@ async function logAIResult(
           model: aiResult?.model || null,
           errorMessage,
           replyLength: replyText.length,
+          needsInfo: extras.needsInfo || [],
         },
       },
     })
@@ -303,4 +376,83 @@ async function logAIResult(
   } catch (err: any) {
     console.error('[AI Log] Failed to save:', err.message)
   }
+}
+
+// ─── Phase 2: Policy & Decision Helpers ────────────────────────
+
+interface PolicyOutcomeResult {
+  handled: boolean
+  replyText: string
+  outcome: 'refuse' | 'escalate' | 'collect' | 'answer'
+  actionName: string | null
+}
+
+async function handlePolicyOutcome(
+  input: TriggerInput,
+  policy: { outcome: string; responseOverride?: string; collectFields?: string[] },
+  tag: string,
+): Promise<PolicyOutcomeResult> {
+  if (policy.outcome === 'block') {
+    const text = policy.responseOverride || 'Bu konuda size yardimci olamiyorum.'
+    await sendReply(input, text, tag)
+    return { handled: true, replyText: text, outcome: 'refuse', actionName: null }
+  }
+
+  if (policy.outcome === 'escalate') {
+    const text = policy.responseOverride || 'Sizi yetkili bir temsilcimize aktariyorum.'
+    await sendReply(input, text, tag)
+    // Handoff hook (prepared — real action engine will own this later)
+    await db.conversation.update({
+      where: { id: input.conversationId },
+      data: { handlerType: 'human', aiEnabled: false },
+    }).catch(() => {})
+    return { handled: true, replyText: text, outcome: 'escalate', actionName: 'escalate_to_agent' }
+  }
+
+  if (policy.outcome === 'collect') {
+    const fields = policy.collectFields || []
+    const text = buildCollectPrompt(fields)
+    await sendReply(input, text, tag)
+    return { handled: true, replyText: text, outcome: 'collect', actionName: null }
+  }
+
+  // 'modify' outcomes apply only post-response — no pre-response handling needed
+  return { handled: false, replyText: '', outcome: 'answer', actionName: null }
+}
+
+function buildCollectPrompt(fields: string[]): string {
+  const labels: Record<string, string> = {
+    name: 'adiniz',
+    phone: 'telefon numaraniz',
+    email: 'e-posta adresiniz',
+    city: 'sehriniz',
+    date: 'uygun tarih',
+  }
+  if (!fields.length) return 'Size daha iyi yardimci olabilmem icin birkac bilgiye ihtiyacim var. Adiniz ve iletisim bilginizi paylasir misiniz?'
+  const list = fields.map(f => labels[f] || f).join(' ve ')
+  return `Size yardimci olabilmem icin ${list} bilgisini paylasir misiniz?`
+}
+
+function resolveDecision(
+  structured: StructuredAIResponse | null,
+  status: 'success' | 'fallback' | 'error',
+  actionHint: { name: string; params: Record<string, any> } | null,
+  confidenceThreshold: number | undefined,
+): string {
+  if (status === 'error') return 'escalate'
+  if (status === 'fallback') return 'answer'
+  if (!structured) return 'answer'
+
+  const threshold = confidenceThreshold ?? 60
+  if (structured.confidence < threshold) return 'escalate'
+
+  if (actionHint) {
+    if (actionHint.name === 'escalate_to_agent') return 'escalate'
+    return 'action'
+  }
+
+  if (structured.needs_info && structured.needs_info.length > 0) return 'collect'
+  if (structured.intent === 'unclear' || structured.intent === 'off_topic') return 'ask'
+
+  return 'answer'
 }
