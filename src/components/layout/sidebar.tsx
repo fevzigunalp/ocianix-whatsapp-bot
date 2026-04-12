@@ -31,6 +31,7 @@ const navigation: NavItem[] = [
     children: [
       { label: 'Sources', href: '/knowledge/sources', icon: FolderOpen },
       { label: 'FAQ', href: '/knowledge/faq', icon: FileText },
+      { label: 'Chunks', href: '/knowledge/chunks', icon: FileText },
       { label: 'Review', href: '/knowledge/review', icon: CheckSquare },
     ],
   },
