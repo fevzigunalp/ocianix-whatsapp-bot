@@ -167,9 +167,11 @@ export function buildStructuredSystemPrompt(
   pack: PackContext | null,
   conversation: ConversationContext,
   knowledgeSnippets?: KnowledgeSnippet[] | string[],
+  salesGuidance?: string | null,
 ): string {
   let base = buildSystemPrompt(pack, conversation)
   base += '\n\n' + buildKnowledgeSection(knowledgeSnippets)
+  if (salesGuidance) base += '\n\n' + salesGuidance
   return base + '\n' + STRUCTURED_INSTRUCTIONS
 }
 

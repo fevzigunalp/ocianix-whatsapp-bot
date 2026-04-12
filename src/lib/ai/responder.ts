@@ -24,6 +24,15 @@ import { evaluatePolicies } from './engines/policy-engine'
 import { executeAction, ensureDefaultActions } from './engines/action-engine'
 import { retrieveKnowledgeWithMeta } from './engines/knowledge-engine'
 import { validateResponse, buildStrictCorrection, type FaithfulnessResult } from './faithfulness-check'
+import {
+  INITIAL_SALES_FLOW,
+  classifySignal,
+  advanceState,
+  buildSalesGuidance,
+  isReadyForLead,
+  buildLeadParams,
+  type SalesFlow,
+} from './sales/sales-engine'
 import { formatPhone } from '@/lib/utils'
 
 const DEBOUNCE_MS = 2000 // Wait 2s after last message before responding
@@ -130,8 +139,22 @@ export async function triggerAIResponse(input: TriggerInput): Promise<void> {
       console.log(tag, `Knowledge[${retrievalType}]: no matches — strict grounding mode`)
     }
 
-    // 6b. Build prompt (Phase 2: structured output + grounded facts)
-    const systemPrompt = buildStructuredSystemPrompt(context.pack, context.conversation, snippets)
+    // 6b. Sales flow state (Phase 3.0)
+    const prevFlow: SalesFlow = readSalesFlow(context.conversationMetadata)
+    const signal = classifySignal(input.messageBody, prevFlow)
+    const nextFlow = advanceState(prevFlow, signal)
+    const salesGuidance = buildSalesGuidance(nextFlow)
+    if (signal.type !== 'knowledge' && signal.type !== 'unclear') {
+      console.log(tag, `Sales signal=${signal.type} stage=${prevFlow.stage}->${nextFlow.stage}`)
+    }
+
+    // 6c. Build prompt (structured output + grounded facts + sales guidance)
+    const systemPrompt = buildStructuredSystemPrompt(
+      context.pack,
+      context.conversation,
+      snippets,
+      salesGuidance,
+    )
     const messages = buildMessages(context.conversation, input.messageBody)
 
     // 7. Call AI
@@ -262,6 +285,38 @@ export async function triggerAIResponse(input: TriggerInput): Promise<void> {
     // 10. Send reply via existing outbound pipeline
     await sendReply(input, replyText, tag)
 
+    // 10b. Persist updated sales flow on the conversation (Phase 3.0)
+    if (nextFlow !== prevFlow) {
+      const mergedMetadata = { ...(context.conversationMetadata || {}), salesFlow: nextFlow as any }
+      await db.conversation.update({
+        where: { id: input.conversationId },
+        data: { metadata: mergedMetadata as any },
+      }).catch(err => console.error(tag, 'Sales state persist failed:', err.message))
+    }
+
+    // 10c. Lead-ready → fire create_lead via existing action engine (once per conversation)
+    if (isReadyForLead(nextFlow) && status === 'success') {
+      const leadDedup = tenantKey(input.tenantId, 'sales_lead', input.conversationId)
+      const first = await redis.set(leadDedup, '1', 'EX', 86400, 'NX')
+      if (first) {
+        await ensureDefaultActions(input.tenantId)
+        const leadParams = buildLeadParams(nextFlow, context.contactName)
+        const leadResult = await executeAction('create_lead', leadParams, {
+          tenantId: input.tenantId,
+          conversationId: input.conversationId,
+          contactId: input.contactId,
+        })
+        console.log(tag, 'Sales lead action:', leadResult.status, leadResult.error || '')
+        if (leadResult.status !== 'success') {
+          await redis.del(leadDedup).catch(() => {})
+        } else if (!executedActionName) {
+          executedActionName = 'create_lead'
+        }
+      } else {
+        console.log(tag, 'Sales lead skipped (already created for this conversation)')
+      }
+    }
+
     // 11. Log with intent/decision/action
     await logAIResult(input, aiResult, replyText, status, errorMsg, context.packVersion, {
       intent: structured?.intent || null,
@@ -277,6 +332,8 @@ export async function triggerAIResponse(input: TriggerInput): Promise<void> {
       faithfulnessPass: faithfulness.pass,
       faithfulnessViolations: faithfulness.violations,
       faithfulnessRetried: retried,
+      salesStage: nextFlow.stage,
+      salesSignal: signal.type,
     })
 
     // 9. Release lock
@@ -330,6 +387,12 @@ async function loadContext(input: TriggerInput) {
     where: { id: input.contactId },
   })
 
+  // Load conversation metadata (carries salesFlow)
+  const conversationRow = await db.conversation.findUnique({
+    where: { id: input.conversationId },
+    select: { metadata: true },
+  })
+
   // Load recent messages
   const recentMessages = await db.message.findMany({
     where: {
@@ -359,7 +422,22 @@ async function loadContext(input: TriggerInput) {
       contactPhone: contact?.phone || '',
       recentMessages,
     },
+    conversationMetadata: (conversationRow?.metadata as Record<string, any>) || {},
+    contactName: contact?.name || null,
     packVersion: pack?.version || null,
+  }
+}
+
+function readSalesFlow(metadata: Record<string, any>): SalesFlow {
+  const raw = metadata?.salesFlow
+  if (!raw || typeof raw !== 'object') return { ...INITIAL_SALES_FLOW }
+  return {
+    stage: raw.stage || 'idle',
+    categoryId: raw.categoryId ?? null,
+    offerId: raw.offerId ?? null,
+    collected: raw.collected && typeof raw.collected === 'object' ? raw.collected : {},
+    askedFor: Array.isArray(raw.askedFor) ? raw.askedFor : [],
+    updatedAt: raw.updatedAt || new Date(0).toISOString(),
   }
 }
 
@@ -438,6 +516,8 @@ interface LogExtras {
   faithfulnessPass?: boolean
   faithfulnessViolations?: string[]
   faithfulnessRetried?: boolean
+  salesStage?: string
+  salesSignal?: string
 }
 
 async function logAIResult(
@@ -478,6 +558,8 @@ async function logAIResult(
           faithfulnessPass: extras.faithfulnessPass ?? true,
           faithfulnessViolations: extras.faithfulnessViolations || [],
           faithfulnessRetried: extras.faithfulnessRetried ?? false,
+          salesStage: extras.salesStage || null,
+          salesSignal: extras.salesSignal || null,
         },
       },
     })
