@@ -139,19 +139,53 @@ export async function triggerAIResponse(input: TriggerInput): Promise<void> {
       console.log(tag, `Knowledge[${retrievalType}]: no matches — strict grounding mode`)
     }
 
-    // 6a'. FAQ SHORT-CIRCUIT (Step 2 — pipeline lock)
-    // If the top retrieval result is a curated FAQ with high similarity,
-    // skip the AI call entirely and serve the FAQ answer verbatim.
-    // Pre-policy has already run; post-policy will still run below.
+    // 6a'. FAQ SHORT-CIRCUIT (Step 2 — pipeline lock; patched for safety).
+    //
+    // Two modes, strictly different rules:
+    //   - retrievalType === 'vector': a genuine cosine score is available,
+    //     so "similarity >= 0.88" is trustworthy.
+    //   - retrievalType === 'text': similarity is a *placeholder* (0.9 for
+    //     FAQs in the fallback path), so it would short-circuit on any
+    //     first-word hit. That's too risky. In this mode we ONLY allow the
+    //     short-circuit when the user's message normalizes to exactly the
+    //     same string as the matched FAQ question.
+    //   - retrievalType === 'none': never short-circuit.
     const FAQ_SHORTCIRCUIT_THRESHOLD = 0.88
     const topK = knowledge[0]
     const topSim = similarityScores[0] ?? 0
-    const faqShort = !!(topK && topK.category === 'faq' && topSim >= FAQ_SHORTCIRCUIT_THRESHOLD)
+    const normalized = normalizeForLexicalMatch(input.messageBody)
+    const faqQuestionNormalized = topK?.pageTitle ? normalizeForLexicalMatch(topK.pageTitle) : null
+    const faqExactLexical = !!(
+      topK && topK.category === 'faq' && faqQuestionNormalized && normalized === faqQuestionNormalized
+    )
+    let faqShortReason: 'vector_high_sim' | 'text_exact_lexical' | null = null
+    if (topK && topK.category === 'faq') {
+      if (retrievalType === 'vector' && topSim >= FAQ_SHORTCIRCUIT_THRESHOLD) {
+        faqShortReason = 'vector_high_sim'
+      } else if (retrievalType === 'text' && faqExactLexical) {
+        faqShortReason = 'text_exact_lexical'
+      }
+    }
+    const faqShort = faqShortReason !== null
     const faqShortInfo = faqShort && topK
-      ? { faqId: topK.id, similarity: Number(topSim.toFixed(4)), title: topK.pageTitle }
+      ? {
+          faqId: topK.id,
+          similarity: retrievalType === 'vector' ? Number(topSim.toFixed(4)) : null,
+          title: topK.pageTitle,
+          reason: faqShortReason,
+          retrievalType,
+        }
       : null
     if (faqShort) {
-      console.log(tag, `FAQ short-circuit: id=${topK!.id} sim=${topSim.toFixed(3)} — skipping AI call`)
+      console.log(tag, `FAQ short-circuit ALLOWED (${faqShortReason}, mode=${retrievalType}): id=${topK!.id} — skipping AI call`)
+    } else if (topK && topK.category === 'faq') {
+      const why =
+        retrievalType === 'vector'
+          ? `sim=${topSim.toFixed(3)} < ${FAQ_SHORTCIRCUIT_THRESHOLD}`
+          : retrievalType === 'text'
+            ? 'no exact lexical match (text fallback requires normalized equality)'
+            : 'retrieval=none'
+      console.log(tag, `FAQ short-circuit DENIED (mode=${retrievalType}): ${why}`)
     }
 
     // 6b. Sales flow state (Phase 3.0)
@@ -465,6 +499,26 @@ async function loadContext(input: TriggerInput) {
  * Extract the answer portion for short-circuit replies; fall back to full
  * content if the format is unexpected.
  */
+/**
+ * Normalize a string for deterministic FAQ-question matching:
+ * lowercase, fold Turkish diacritics, strip punctuation, collapse whitespace.
+ * Used only by the text-fallback short-circuit path where cosine similarity
+ * is a placeholder and we require an exact lexical match instead.
+ */
+function normalizeForLexicalMatch(s: string): string {
+  // NFKD + strip combining marks handles ü/ö/ç/ş/ğ/İ (İ -> I + U+0307).
+  // Explicit ı -> i is still needed because dotless i is a base letter,
+  // not a decomposable form.
+  return s
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/ı/g, 'i')
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 function extractFaqAnswer(content: string): string {
   const idx = content.indexOf('\nA: ')
   if (idx >= 0) return content.slice(idx + 4).trim()
@@ -562,7 +616,13 @@ interface LogExtras {
   salesStage?: string
   salesSignal?: string
   shortCircuit?: 'faq' | null
-  shortCircuitInfo?: { faqId: string; similarity: number; title: string | null } | null
+  shortCircuitInfo?: {
+    faqId: string
+    similarity: number | null
+    title: string | null
+    reason: 'vector_high_sim' | 'text_exact_lexical' | null
+    retrievalType: 'vector' | 'text' | 'none'
+  } | null
 }
 
 async function logAIResult(
