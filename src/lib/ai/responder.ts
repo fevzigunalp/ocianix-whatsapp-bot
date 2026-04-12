@@ -139,6 +139,21 @@ export async function triggerAIResponse(input: TriggerInput): Promise<void> {
       console.log(tag, `Knowledge[${retrievalType}]: no matches — strict grounding mode`)
     }
 
+    // 6a'. FAQ SHORT-CIRCUIT (Step 2 — pipeline lock)
+    // If the top retrieval result is a curated FAQ with high similarity,
+    // skip the AI call entirely and serve the FAQ answer verbatim.
+    // Pre-policy has already run; post-policy will still run below.
+    const FAQ_SHORTCIRCUIT_THRESHOLD = 0.88
+    const topK = knowledge[0]
+    const topSim = similarityScores[0] ?? 0
+    const faqShort = !!(topK && topK.category === 'faq' && topSim >= FAQ_SHORTCIRCUIT_THRESHOLD)
+    const faqShortInfo = faqShort && topK
+      ? { faqId: topK.id, similarity: Number(topSim.toFixed(4)), title: topK.pageTitle }
+      : null
+    if (faqShort) {
+      console.log(tag, `FAQ short-circuit: id=${topK!.id} sim=${topSim.toFixed(3)} — skipping AI call`)
+    }
+
     // 6b. Sales flow state (Phase 3.0)
     const prevFlow: SalesFlow = readSalesFlow(context.conversationMetadata)
     const signal = classifySignal(input.messageBody, prevFlow)
@@ -149,39 +164,50 @@ export async function triggerAIResponse(input: TriggerInput): Promise<void> {
     }
 
     // 6c. Build prompt (structured output + grounded facts + sales guidance)
-    const systemPrompt = buildStructuredSystemPrompt(
-      context.pack,
-      context.conversation,
-      snippets,
-      salesGuidance,
-    )
+    // Skipped entirely on FAQ short-circuit.
+    let systemPrompt = ''
     const messages = buildMessages(context.conversation, input.messageBody)
-
-    // 7. Call AI
-    const aiResult = await callAI(systemPrompt, messages)
 
     let replyText: string
     let status: 'success' | 'fallback' | 'error'
     let errorMsg: string | null = null
     let structured: StructuredAIResponse | null = null
+    let aiResult: AIResponse | null = null
 
-    if (aiResult && aiResult.text.trim()) {
-      structured = parseStructuredResponse(aiResult.text)
-      if (structured) {
-        replyText = structured.response
-        status = 'success'
-        console.log(tag, `AI [${structured.intent} ${structured.confidence}%]:`, replyText.substring(0, 80))
-      } else {
-        // Model didn't follow JSON format — use raw text as fallback so user still gets a reply
-        replyText = aiResult.text.trim()
-        status = 'success'
-        console.log(tag, 'AI (unstructured):', replyText.substring(0, 80))
-      }
+    if (faqShort && topK) {
+      // Serve the FAQ answer verbatim. Content is stored as "Q: ...\nA: ...".
+      replyText = extractFaqAnswer(topK.content)
+      status = 'success'
+      console.log(tag, `FAQ answer: ${replyText.substring(0, 80)}`)
     } else {
-      replyText = FALLBACK_REPLY
-      status = aiResult ? 'fallback' : 'error'
-      errorMsg = aiResult ? 'Empty AI response' : 'AI provider unavailable'
-      console.log(tag, 'Using fallback:', errorMsg)
+      systemPrompt = buildStructuredSystemPrompt(
+        context.pack,
+        context.conversation,
+        snippets,
+        salesGuidance,
+      )
+
+      // 7. Call AI
+      aiResult = await callAI(systemPrompt, messages)
+
+      if (aiResult && aiResult.text.trim()) {
+        structured = parseStructuredResponse(aiResult.text)
+        if (structured) {
+          replyText = structured.response
+          status = 'success'
+          console.log(tag, `AI [${structured.intent} ${structured.confidence}%]:`, replyText.substring(0, 80))
+        } else {
+          // Model didn't follow JSON format — use raw text as fallback so user still gets a reply
+          replyText = aiResult.text.trim()
+          status = 'success'
+          console.log(tag, 'AI (unstructured):', replyText.substring(0, 80))
+        }
+      } else {
+        replyText = FALLBACK_REPLY
+        status = aiResult ? 'fallback' : 'error'
+        errorMsg = aiResult ? 'Empty AI response' : 'AI provider unavailable'
+        console.log(tag, 'Using fallback:', errorMsg)
+      }
     }
 
     // 8. POST-RESPONSE POLICY CHECK (Phase 2)
@@ -193,10 +219,11 @@ export async function triggerAIResponse(input: TriggerInput): Promise<void> {
       errorMsg = `post_policy_${postCheck.policyType}`
     }
 
-    // 8b. Faithfulness guardrail (Phase 2.7) — only inspect genuine AI replies
+    // 8b. Faithfulness guardrail (Phase 2.7) — only inspect genuine AI replies.
+    // Skipped on FAQ short-circuit: the reply IS the verified source.
     let faithfulness: FaithfulnessResult = { pass: true, violations: [], unsupportedNumbers: [], unsupportedUrls: [], unsupportedPhones: [] }
     let retried = false
-    if (status === 'success' && structured) {
+    if (!faqShort && status === 'success' && structured) {
       const sourceTexts = knowledge.map(k => k.content)
       faithfulness = validateResponse(replyText, sourceTexts)
       if (!faithfulness.pass) {
@@ -242,12 +269,13 @@ export async function triggerAIResponse(input: TriggerInput): Promise<void> {
     }
 
     // 9. Apply confidence gate + action execution (Phase 2.2)
+    // On FAQ short-circuit: decision is a deterministic "answer"; actions are skipped.
     const actionHint = structured?.action_hint || null
     const threshold = context.pack?.confidenceThreshold ?? 60
-    const decision = resolveDecision(structured, status, actionHint, threshold)
+    const decision = faqShort ? 'answer' : resolveDecision(structured, status, actionHint, threshold)
     let executedActionName: string | null = null
 
-    if (actionHint && status === 'success' && structured) {
+    if (!faqShort && actionHint && status === 'success' && structured) {
       const conf = structured.confidence
       if (conf < Math.max(threshold, 60)) {
         console.log(tag, `Action skipped (low confidence ${conf} < ${threshold}):`, actionHint.name)
@@ -319,8 +347,10 @@ export async function triggerAIResponse(input: TriggerInput): Promise<void> {
 
     // 11. Log with intent/decision/action
     await logAIResult(input, aiResult, replyText, status, errorMsg, context.packVersion, {
-      intent: structured?.intent || null,
-      confidence: structured?.confidence ?? (status === 'success' ? 70 : status === 'fallback' ? 30 : 0),
+      intent: faqShort ? 'FAQ' : (structured?.intent || null),
+      confidence: faqShort
+        ? 95
+        : (structured?.confidence ?? (status === 'success' ? 70 : status === 'fallback' ? 30 : 0)),
       decision,
       actionName: executedActionName || actionHint?.name || null,
       needsInfo: structured?.needs_info || [],
@@ -334,6 +364,8 @@ export async function triggerAIResponse(input: TriggerInput): Promise<void> {
       faithfulnessRetried: retried,
       salesStage: nextFlow.stage,
       salesSignal: signal.type,
+      shortCircuit: faqShort ? 'faq' : null,
+      shortCircuitInfo: faqShortInfo,
     })
 
     // 9. Release lock
@@ -428,6 +460,17 @@ async function loadContext(input: TriggerInput) {
   }
 }
 
+/**
+ * Knowledge-engine stores FAQ content as "Q: <question>\nA: <answer>".
+ * Extract the answer portion for short-circuit replies; fall back to full
+ * content if the format is unexpected.
+ */
+function extractFaqAnswer(content: string): string {
+  const idx = content.indexOf('\nA: ')
+  if (idx >= 0) return content.slice(idx + 4).trim()
+  return content.trim()
+}
+
 function readSalesFlow(metadata: Record<string, any>): SalesFlow {
   const raw = metadata?.salesFlow
   if (!raw || typeof raw !== 'object') return { ...INITIAL_SALES_FLOW }
@@ -518,6 +561,8 @@ interface LogExtras {
   faithfulnessRetried?: boolean
   salesStage?: string
   salesSignal?: string
+  shortCircuit?: 'faq' | null
+  shortCircuitInfo?: { faqId: string; similarity: number; title: string | null } | null
 }
 
 async function logAIResult(
@@ -560,6 +605,8 @@ async function logAIResult(
           faithfulnessRetried: extras.faithfulnessRetried ?? false,
           salesStage: extras.salesStage || null,
           salesSignal: extras.salesSignal || null,
+          shortCircuit: extras.shortCircuit || null,
+          shortCircuitInfo: extras.shortCircuitInfo || null,
         },
       },
     })
