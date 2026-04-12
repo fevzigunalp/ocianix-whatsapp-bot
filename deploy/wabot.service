@@ -1,0 +1,33 @@
+# Canonical systemd unit for the WhatsApp AI Platform Next.js app.
+# Install:
+#   sudo cp deploy/wabot.service /etc/systemd/system/wabot.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now wabot
+#
+# Assumes the repo is checked out at /opt/wabot and env lives at
+# /opt/wabot/platform/.env. Adjust paths if you deploy elsewhere.
+
+[Unit]
+Description=WhatsApp AI Platform (Next.js)
+After=network.target docker.service
+Wants=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/wabot/platform
+EnvironmentFile=/opt/wabot/platform/.env
+ExecStart=/usr/bin/npm run start:prod
+Restart=always
+RestartSec=5
+User=wabot
+Group=wabot
+
+# Hardening (safe defaults — loosen if you need to write outside WorkingDir)
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/wabot/platform/.next
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

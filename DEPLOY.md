@@ -15,16 +15,16 @@ All of these go into `platform/.env`. Template: `.env.example`.
 | `AUTH_URL` / `NEXTAUTH_URL` | `https://app.yourdomain.com` | **HTTPS** canonical URL |
 | `REDIS_URL` | `redis://:***@redis:6379` | Password required in prod |
 | `MINIO_ENDPOINT` / `_PORT` / `_ACCESS_KEY` / `_SECRET_KEY` / `_BUCKET` | `minio` / `9000` / ... | |
-| `EVOLUTION_API_URL` | `http://localhost:8080` | App → Evolution (private, via host) |
+| `EVOLUTION_API_URL` | `http://127.0.0.1:8080` | App → Evolution (private, loopback only) |
+| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | `wabot` / *** / `wabot_platform` | Consumed by `docker-compose.prod.yml` |
+| `REDIS_PASSWORD` | *** | Enforced by prod compose |
+| `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | `wabot_minio` / *** | Enforced by prod compose |
+| `N8N_USER` / `N8N_PASSWORD` / `N8N_PUBLIC_URL` | | Only if n8n is used |
 | `EVOLUTION_API_KEY` | `***` | Must match Evolution's `AUTHENTICATION_API_KEY` |
 | `ANTHROPIC_API_KEY` | `sk-ant-...` | Required for AI replies |
 | `OPENAI_API_KEY` | `sk-...` | Optional — enables vector retrieval |
 | `NEXT_PUBLIC_APP_URL` | `https://app.yourdomain.com` | Used in UI and links |
 | `PUBLIC_WEBHOOK_URL` | `https://app.yourdomain.com` | URL Evolution POSTs webhooks to; defaults to `NEXT_PUBLIC_APP_URL` |
-| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | | Consumed by `docker-compose.prod.yml` |
-| `REDIS_PASSWORD` | | Enforced by prod compose override |
-| `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | | Same |
-| `N8N_USER` / `N8N_PASSWORD` / `N8N_PUBLIC_URL` | | Only if n8n is used |
 | `NODE_ENV` | `production` | |
 | `PORT` | `3001` | Port Next.js listens on |
 
@@ -66,73 +66,38 @@ From the repo root, `cd platform`:
 ```bash
 # 1) Fill env
 cp .env.example .env
-$EDITOR .env
+$EDITOR .env                     # every CHANGE_ME must be replaced
 
 # 2) Start stateful + Evolution stack
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d postgres redis minio evolution-api
 # (add `n8n` at the end if you use it)
 
-# 3) Install app deps + build
+# 3) Install app deps, migrate, seed, build
 npm ci
 npx prisma generate
-npx prisma db push               # first deploy only; use `migrate deploy` after you generate migrations
+npm run migrate:deploy           # applies prisma/migrations; first run needs migrations committed
 npm run db:seed                  # first deploy only (creates admin + default pack)
-npm run build
+npm run build                    # produces .next/standalone + postbuild copies public/ and .next/static
 
-# 4) Run the app (systemd unit recommended; quick start below)
-NODE_ENV=production PORT=3001 node .next/standalone/server.js
+# 4) Install and start the canonical systemd unit
+sudo cp deploy/wabot.service /etc/systemd/system/wabot.service
+sudo systemctl daemon-reload && sudo systemctl enable --now wabot
+sudo systemctl status wabot      # should be active (running)
 ```
 
-Systemd unit (`/etc/systemd/system/wabot.service`):
-```ini
-[Unit]
-Description=WhatsApp AI Platform (Next.js)
-After=network.target docker.service
+The unit runs `npm run start:prod`, which launches `.next/standalone/server.js`
+on `PORT=3001` with `NODE_ENV=production`. The full unit file lives at
+`deploy/wabot.service`; it assumes the repo is at `/opt/wabot/platform`.
 
-[Service]
-Type=simple
-WorkingDirectory=/opt/wabot/platform
-EnvironmentFile=/opt/wabot/platform/.env
-ExecStart=/usr/bin/node .next/standalone/server.js
-Restart=always
-RestartSec=5
-User=wabot
-
-[Install]
-WantedBy=multi-user.target
-```
+Install the canonical Nginx vhost from `deploy/nginx.conf.example`:
 ```bash
-systemctl daemon-reload && systemctl enable --now wabot
+sudo cp deploy/nginx.conf.example /etc/nginx/sites-available/wabot
+sudo ln -s /etc/nginx/sites-available/wabot /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
+sudo certbot --nginx -d app.yourdomain.com
 ```
-
-Nginx vhost for `app.yourdomain.com` (key bits):
-```nginx
-server {
-  server_name app.yourdomain.com;
-  listen 443 ssl http2;
-
-  # SSE stream needs buffering off and long timeouts
-  location /api/sse {
-    proxy_pass http://127.0.0.1:3001;
-    proxy_http_version 1.1;
-    proxy_set_header Connection '';
-    proxy_buffering off;
-    proxy_cache off;
-    proxy_read_timeout 1h;
-    chunked_transfer_encoding on;
-  }
-
-  location / {
-    proxy_pass http://127.0.0.1:3001;
-    proxy_http_version 1.1;
-    proxy_set_header Host $host;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-    proxy_read_timeout 60s;
-  }
-}
-```
-Then `certbot --nginx -d app.yourdomain.com` (repeat for any other subdomains).
+The vhost ships with the SSE-safe `/api/sse` block (`proxy_buffering off`,
+`proxy_read_timeout 1h`) and a separate `/api/webhook/` block.
 
 ---
 
@@ -145,7 +110,7 @@ The app registers the webhook automatically:
 
 Manual verification:
 ```bash
-curl -s -H "apikey: $EVOLUTION_API_KEY" http://localhost:8080/webhook/find/<instanceName>
+curl -s -H "apikey: $EVOLUTION_API_KEY" http://127.0.0.1:8080/webhook/find/<instanceName>
 # → should list MESSAGES_UPSERT etc with the public URL
 ```
 
@@ -174,7 +139,7 @@ Run through all of these. Every one must pass before inviting real users.
 - [ ] `/dashboard` loads, sidebar renders, no console errors
 - [ ] Inbox opens an existing conversation, SSE connects (DevTools → Network → `/api/sse` stays pending)
 - [ ] Create a WhatsApp instance from the UI → QR shows → scan → status flips to `connected` within ~20s
-- [ ] `curl -s -H "apikey: $EVOLUTION_API_KEY" http://localhost:8080/webhook/find/<instanceName>` returns the public URL
+- [ ] `curl -s -H "apikey: $EVOLUTION_API_KEY" http://127.0.0.1:8080/webhook/find/<instanceName>` returns the public URL
 - [ ] Send an inbound WhatsApp message → appears in Inbox within 2s, triggers AI reply (if `aiEnabled=true`)
 - [ ] Outbound send from the Inbox UI hits the contact on WhatsApp
 - [ ] `POST /api/whatsapp/sync` returns `synced:true, webhookSet:true` for each instance
