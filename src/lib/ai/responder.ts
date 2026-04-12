@@ -31,6 +31,7 @@ import {
   buildSalesGuidance,
   isReadyForLead,
   buildLeadParams,
+  computeMissingFields,
   type SalesFlow,
 } from './sales/sales-engine'
 import { formatPhone } from '@/lib/utils'
@@ -193,8 +194,15 @@ export async function triggerAIResponse(input: TriggerInput): Promise<void> {
     const signal = classifySignal(input.messageBody, prevFlow)
     const nextFlow = advanceState(prevFlow, signal)
     const salesGuidance = buildSalesGuidance(nextFlow)
+    const missingSalesFields = computeMissingFields(nextFlow)
+    const leadEligible = isReadyForLead(nextFlow)
     if (signal.type !== 'knowledge' && signal.type !== 'unclear') {
-      console.log(tag, `Sales signal=${signal.type} stage=${prevFlow.stage}->${nextFlow.stage}`)
+      console.log(
+        tag,
+        `Sales signal=${signal.type} stage=${prevFlow.stage}->${nextFlow.stage}` +
+          (missingSalesFields.length ? ` missing=[${missingSalesFields.join(',')}]` : '') +
+          (leadEligible ? ' LEAD_ELIGIBLE' : ''),
+      )
     }
 
     // 6c. Build prompt (structured output + grounded facts + sales guidance)
@@ -284,20 +292,14 @@ export async function triggerAIResponse(input: TriggerInput): Promise<void> {
             replyText = 'Bu bilgiyi kontrol edip en kısa sürede bir temsilcimiz sizi arayacak. Tesekkurler.'
             status = 'fallback'
             errorMsg = 'faithfulness_violation'
-            await db.conversation.update({
-              where: { id: input.conversationId },
-              data: { handlerType: 'human', aiEnabled: false },
-            }).catch(() => {})
+            await performHandoff(input.tenantId, input.conversationId, 'faithfulness_violation', tag)
           }
         } else {
           console.log(tag, 'Faithfulness retry empty → escalate')
           replyText = 'Bu bilgiyi kontrol edip en kısa sürede bir temsilcimiz sizi arayacak. Tesekkurler.'
           status = 'fallback'
           errorMsg = 'faithfulness_retry_empty'
-          await db.conversation.update({
-            where: { id: input.conversationId },
-            data: { handlerType: 'human', aiEnabled: false },
-          }).catch(() => {})
+          await performHandoff(input.tenantId, input.conversationId, 'faithfulness_retry_empty', tag)
         }
       }
     }
@@ -329,6 +331,12 @@ export async function triggerAIResponse(input: TriggerInput): Promise<void> {
           console.log(tag, 'Action result:', result.status, result.error || '')
           if (result.status === 'success') {
             executedActionName = actionHint.name
+            // Action-side escalations must still emit the SSE handoff
+            // notification + reason metadata. performHandoff is idempotent.
+            if (actionHint.name === 'escalate_to_agent' || actionHint.name === 'handoff') {
+              const reason = String((actionHint.params || {}).reason || 'action_escalate')
+              await performHandoff(input.tenantId, input.conversationId, reason, tag)
+            }
           } else {
             await redis.del(dedupKey).catch(() => {})
           }
@@ -338,10 +346,7 @@ export async function triggerAIResponse(input: TriggerInput): Promise<void> {
 
     // If decision escalates but no handoff action was executed, still flip conversation to human
     if (decision === 'escalate' && status === 'success' && executedActionName !== 'escalate_to_agent' && executedActionName !== 'handoff') {
-      await db.conversation.update({
-        where: { id: input.conversationId },
-        data: { handlerType: 'human', aiEnabled: false },
-      }).catch(() => {})
+      await performHandoff(input.tenantId, input.conversationId, 'low_confidence_or_unclear', tag)
     }
 
     // 10. Send reply via existing outbound pipeline
@@ -398,6 +403,8 @@ export async function triggerAIResponse(input: TriggerInput): Promise<void> {
       faithfulnessRetried: retried,
       salesStage: nextFlow.stage,
       salesSignal: signal.type,
+      missingSalesFields,
+      leadEligible,
       shortCircuit: faqShort ? 'faq' : null,
       shortCircuitInfo: faqShortInfo,
     })
@@ -495,6 +502,56 @@ async function loadContext(input: TriggerInput) {
 }
 
 /**
+ * Central handoff primitive. Single-source-of-truth for "escalate this
+ * conversation to a human." Updates the conversation row, stamps the
+ * reason into metadata.handoff, and emits an SSE notification so agent
+ * UIs can surface the escalation without polling.
+ *
+ * Idempotent: already-handed-off conversations are only updated once
+ * per trigger; the SSE notification still fires so late-joining clients
+ * pick it up.
+ */
+async function performHandoff(
+  tenantId: string,
+  conversationId: string,
+  reason: string,
+  tag: string,
+): Promise<void> {
+  console.log(tag, `HANDOFF: ${reason}`)
+  const at = new Date().toISOString()
+  try {
+    const existing = await db.conversation.findUnique({
+      where: { id: conversationId },
+      select: { metadata: true, handlerType: true, aiEnabled: true },
+    })
+    const mergedMeta = {
+      ...(((existing?.metadata as Record<string, any>) || {})),
+      handoff: { reason, at },
+    }
+    await db.conversation.update({
+      where: { id: conversationId },
+      data: {
+        handlerType: 'human',
+        aiEnabled: false,
+        assignedTo: null,
+        metadata: mergedMeta as any,
+      },
+    })
+  } catch (err: any) {
+    console.error(tag, 'Handoff DB update failed:', err.message)
+  }
+  try {
+    await publishSSE({
+      type: 'notification',
+      tenantId,
+      data: { kind: 'handoff', conversationId, reason, at },
+    })
+  } catch (err: any) {
+    console.error(tag, 'Handoff SSE failed:', err.message)
+  }
+}
+
+/**
  * Knowledge-engine stores FAQ content as "Q: <question>\nA: <answer>".
  * Extract the answer portion for short-circuit replies; fall back to full
  * content if the format is unexpected.
@@ -534,6 +591,7 @@ function readSalesFlow(metadata: Record<string, any>): SalesFlow {
     offerId: raw.offerId ?? null,
     collected: raw.collected && typeof raw.collected === 'object' ? raw.collected : {},
     askedFor: Array.isArray(raw.askedFor) ? raw.askedFor : [],
+    lastAskedFor: raw.lastAskedFor ?? null,
     updatedAt: raw.updatedAt || new Date(0).toISOString(),
   }
 }
@@ -615,6 +673,8 @@ interface LogExtras {
   faithfulnessRetried?: boolean
   salesStage?: string
   salesSignal?: string
+  missingSalesFields?: string[]
+  leadEligible?: boolean
   shortCircuit?: 'faq' | null
   shortCircuitInfo?: {
     faqId: string
@@ -665,6 +725,8 @@ async function logAIResult(
           faithfulnessRetried: extras.faithfulnessRetried ?? false,
           salesStage: extras.salesStage || null,
           salesSignal: extras.salesSignal || null,
+          missingSalesFields: extras.missingSalesFields || [],
+          leadEligible: extras.leadEligible ?? false,
           shortCircuit: extras.shortCircuit || null,
           shortCircuitInfo: extras.shortCircuitInfo || null,
         },
@@ -716,11 +778,7 @@ async function handlePolicyOutcome(
   if (policy.outcome === 'escalate') {
     const text = policy.responseOverride || 'Sizi yetkili bir temsilcimize aktariyorum.'
     await sendReply(input, text, tag)
-    // Handoff hook (prepared — real action engine will own this later)
-    await db.conversation.update({
-      where: { id: input.conversationId },
-      data: { handlerType: 'human', aiEnabled: false },
-    }).catch(() => {})
+    await performHandoff(input.tenantId, input.conversationId, `policy_${(policy as any).policyType || 'escalate'}`, tag)
     return { handled: true, replyText: text, outcome: 'escalate', actionName: 'escalate_to_agent' }
   }
 

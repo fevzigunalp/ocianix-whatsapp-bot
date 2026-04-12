@@ -9,7 +9,7 @@
  * event/photography businesses.
  */
 
-export type DetailField = 'date' | 'guests' | 'participants' | 'time' | 'location' | 'extras'
+export type DetailField = 'name' | 'date' | 'guests' | 'participants' | 'time' | 'location' | 'extras'
 
 export interface SalesOffer {
   id: string
@@ -36,25 +36,25 @@ export const SALES_CATALOG: SalesCategory[] = [
         id: 'marriage_proposal',
         label: 'Evlilik Teklifi',
         aliases: ['evlilik teklifi', 'teklif', 'proposal', 'evlenme teklifi', 'surprise proposal'],
-        required: ['date', 'guests'],
+        required: ['name', 'date', 'guests'],
       },
       {
         id: 'birthday',
         label: 'Doğum Günü',
         aliases: ['dogum gunu', 'doğum günü', 'birthday', 'dogumgunu'],
-        required: ['date', 'guests'],
+        required: ['name', 'date', 'guests'],
       },
       {
         id: 'sunset_dinner',
         label: 'Gün Batımı Yemeği',
         aliases: ['gun batimi', 'gün batımı', 'sunset dinner', 'romantik yemek', 'özel yemek'],
-        required: ['date', 'guests'],
+        required: ['name', 'date', 'guests'],
       },
       {
         id: 'anniversary',
         label: 'Yıldönümü',
         aliases: ['yildonumu', 'yıldönümü', 'anniversary', 'evlilik yıldönümü'],
-        required: ['date', 'guests'],
+        required: ['name', 'date', 'guests'],
       },
     ],
   },
@@ -67,25 +67,25 @@ export const SALES_CATALOG: SalesCategory[] = [
         id: 'couple_shoot',
         label: 'Çift Çekimi',
         aliases: ['cift cekimi', 'çift çekimi', 'couple shoot', 'cift foto'],
-        required: ['date', 'participants'],
+        required: ['name', 'date', 'participants'],
       },
       {
         id: 'proposal_shoot',
         label: 'Evlilik Teklifi Çekimi',
         aliases: ['teklif cekimi', 'teklif çekimi', 'proposal shoot', 'evlilik teklifi çekimi'],
-        required: ['date', 'participants'],
+        required: ['name', 'date', 'participants'],
       },
       {
         id: 'flying_dress',
         label: 'Flying Dress',
         aliases: ['flying dress', 'uçan elbise', 'ucan elbise'],
-        required: ['date', 'participants'],
+        required: ['name', 'date', 'participants'],
       },
       {
         id: 'photo_video_package',
         label: 'Video / Fotoğraf Paketleri',
         aliases: ['paket', 'video paketi', 'foto paketi', 'combo', 'video+foto'],
-        required: ['date', 'participants'],
+        required: ['name', 'date', 'participants'],
       },
     ],
   },
@@ -98,25 +98,25 @@ export const SALES_CATALOG: SalesCategory[] = [
         id: 'horse_riding',
         label: 'At Binme',
         aliases: ['at binme', 'at turu', 'horse riding', 'horse'],
-        required: ['date', 'participants'],
+        required: ['name', 'date', 'participants'],
       },
       {
         id: 'classic_car',
         label: 'Klasik Araba',
         aliases: ['klasik araba', 'classic car', 'eski araba', 'vintage car'],
-        required: ['date', 'participants'],
+        required: ['name', 'date', 'participants'],
       },
       {
         id: 'balloon_backdrop_shoot',
         label: 'Balon Manzaralı Çekim',
         aliases: ['balon manzarali', 'balon manzarası', 'balloon backdrop', 'balon çekim'],
-        required: ['date', 'participants'],
+        required: ['name', 'date', 'participants'],
       },
       {
         id: 'other_activity',
         label: 'Diğer Aktiviteler',
         aliases: ['diğer aktivite', 'diger aktivite', 'other activity'],
-        required: ['date', 'participants'],
+        required: ['name', 'date', 'participants'],
       },
     ],
   },

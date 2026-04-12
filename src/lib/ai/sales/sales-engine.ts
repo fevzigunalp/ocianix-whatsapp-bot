@@ -37,6 +37,7 @@ export interface SalesFlow {
   offerId: string | null
   collected: Partial<Record<DetailField, string | number>>
   askedFor: DetailField[] // fields we already asked about (to avoid re-asking same turn)
+  lastAskedFor: DetailField | null // what we asked in the PREVIOUS turn — primes capture on this turn
   updatedAt: string // ISO
 }
 
@@ -46,7 +47,19 @@ export const INITIAL_SALES_FLOW: SalesFlow = {
   offerId: null,
   collected: {},
   askedFor: [],
+  lastAskedFor: null,
   updatedAt: new Date(0).toISOString(),
+}
+
+/** Ordered list of still-missing required fields for the current offer. */
+export function computeMissingFields(state: SalesFlow): DetailField[] {
+  const offer = findOffer(state.categoryId, state.offerId)
+  if (!offer) return []
+  return offer.required.filter(f => state.collected[f] === undefined || state.collected[f] === '')
+}
+
+function computeNextMissing(state: SalesFlow): DetailField | null {
+  return computeMissingFields(state)[0] || null
 }
 
 export type SignalType =
@@ -79,15 +92,22 @@ export function classifySignal(message: string, current: SalesFlow): SalesSignal
   if (!raw) return { type: 'unclear' }
   const m = foldTr(raw)
 
-  // 1) Direct offer match — strongest signal (also wins over ordinals)
+  // 1) Direct offer match — strongest signal. Prefer the LONGEST alias
+  // that matches so "evlilik teklifi çekimi" routes to proposal_shoot
+  // instead of the shorter "evlilik teklifi" -> marriage_proposal.
+  let bestOffer: { category: SalesCategory; offer: SalesOffer; aliasLen: number } | null = null
   for (const cat of SALES_CATALOG) {
     for (const off of cat.offers) {
       for (const alias of off.aliases) {
-        if (m.includes(foldTr(alias))) {
-          return { type: 'direct_offer', matchedOffer: { category: cat, offer: off } }
+        const a = foldTr(alias)
+        if (m.includes(a) && (!bestOffer || a.length > bestOffer.aliasLen)) {
+          bestOffer = { category: cat, offer: off, aliasLen: a.length }
         }
       }
     }
+  }
+  if (bestOffer) {
+    return { type: 'direct_offer', matchedOffer: { category: bestOffer.category, offer: bestOffer.offer } }
   }
 
   // 2) If we're offering choices (category_selected), try ordinal or alias pick
@@ -138,6 +158,24 @@ export function classifySignal(message: string, current: SalesFlow): SalesSignal
 export function extractDetails(message: string, current: SalesFlow): Partial<Record<DetailField, string | number>> {
   const out: Partial<Record<DetailField, string | number>> = {}
   const m = message.toLowerCase()
+  const trimmed = message.trim().replace(/\s+/g, ' ')
+
+  // Name — explicit phrase ("Ben Ayşe", "Adım Ayşe Yılmaz", "My name is...")
+  if (!current.collected.name) {
+    const explicit = /(?:^|\b)(?:ben(?:im)?|ad[ıi]m|ismim|my name is|i\s*am|i['’]m)\s+([\p{L}\p{M}][\p{L}\p{M}\s.'\-]{1,60})/iu.exec(message)
+    if (explicit) {
+      out.name = explicit[1].trim().replace(/\s+/g, ' ')
+    } else if (current.lastAskedFor === 'name') {
+      // We just asked for name — if the whole reply looks like a name, accept it.
+      if (
+        trimmed.length >= 2 &&
+        trimmed.length <= 60 &&
+        /^\p{L}[\p{L}\p{M}\s.'\-]*$/u.test(trimmed)
+      ) {
+        out.name = trimmed
+      }
+    }
+  }
 
   // Date: dd.mm[.yyyy] or dd/mm[/yyyy] or dd MMM (Turkish month)
   const dm =
@@ -151,11 +189,22 @@ export function extractDetails(message: string, current: SalesFlow): Partial<Rec
     'bes': 5, 'beş': 5, 'alti': 6, 'altı': 6, 'yedi': 7, 'sekiz': 8,
     'dokuz': 9, 'on': 10,
   }
-  const numericGuests = m.match(/(\d{1,3})\s*(?:kisi|kişi|misafir|guest|pax|kişilik|kisilik)\b/)
-  const wordGuests = m.match(/\b(bir|iki|uc|üç|dort|dört|bes|beş|alti|altı|yedi|sekiz|dokuz|on)\s*(?:kisi|kişi|misafir)\b/)
-  const count = numericGuests ? Number(numericGuests[1]) : wordGuests ? WORD_NUM[wordGuests[1]] : null
+  // "5 kişi", "2 kişiyiz" (no \b — kişi may be followed by a Turkish suffix)
+  const numericGuests = m.match(/(\d{1,3})\s*(?:kisi|kişi|misafir|guest|pax|kişilik|kisilik)/)
+  const wordGuests = m.match(/\b(bir|iki|uc|üç|dort|dört|bes|beş|alti|altı|yedi|sekiz|dokuz|on)\s*(?:kisi|kişi|misafir)/)
+  let count = numericGuests ? Number(numericGuests[1]) : wordGuests ? WORD_NUM[wordGuests[1]] : null
+
+  // Fallback: if we asked specifically for guests/participants and the user
+  // replied with a bare number ("2"), accept it.
+  if (
+    count === null &&
+    (current.lastAskedFor === 'guests' || current.lastAskedFor === 'participants')
+  ) {
+    const bare = m.match(/(?:^|\s)(\d{1,3})(?:\s|$)/)
+    if (bare) count = Number(bare[1])
+  }
+
   if (count !== null && !Number.isNaN(count)) {
-    // route into whichever field the current offer wants
     const offer = findOffer(current.categoryId, current.offerId)
     const field: DetailField = offer?.required.includes('guests')
       ? 'guests'
@@ -171,32 +220,38 @@ export function extractDetails(message: string, current: SalesFlow): Partial<Rec
 /** Given a signal, produce the next state. Pure — doesn't write anywhere. */
 export function advanceState(current: SalesFlow, signal: SalesSignal): SalesFlow {
   const now = new Date().toISOString()
+  let next: SalesFlow
 
   switch (signal.type) {
     case 'discovery':
-      return { ...INITIAL_SALES_FLOW, stage: 'idle', updatedAt: now }
+      next = { ...INITIAL_SALES_FLOW, stage: 'idle', updatedAt: now }
+      break
 
     case 'category_pick': {
       if (!signal.matchedCategory) return current
-      return {
+      next = {
         ...current,
         stage: 'category_selected',
         categoryId: signal.matchedCategory.id,
         offerId: null,
+        lastAskedFor: null,
         updatedAt: now,
       }
+      break
     }
 
     case 'direct_offer': {
       if (!signal.matchedOffer) return current
-      return {
+      next = {
         stage: 'offer_selected',
         categoryId: signal.matchedOffer.category.id,
         offerId: signal.matchedOffer.offer.id,
         collected: {},
         askedFor: [],
+        lastAskedFor: null,
         updatedAt: now,
       }
+      break
     }
 
     case 'detail_answer': {
@@ -204,12 +259,13 @@ export function advanceState(current: SalesFlow, signal: SalesSignal): SalesFlow
       const offer = findOffer(current.categoryId, current.offerId)
       const required = offer?.required || []
       const allCollected = required.every(f => merged[f] !== undefined && merged[f] !== '')
-      return {
+      next = {
         ...current,
         stage: allCollected ? 'lead_ready' : 'collecting_details',
         collected: merged,
         updatedAt: now,
       }
+      break
     }
 
     case 'knowledge':
@@ -217,6 +273,11 @@ export function advanceState(current: SalesFlow, signal: SalesSignal): SalesFlow
     default:
       return current
   }
+
+  // Always recompute which field the NEXT guidance turn will ask for,
+  // so the state carries its "asking for X" commitment across the reply.
+  next.lastAskedFor = computeNextMissing(next)
+  return next
 }
 
 export function isReadyForLead(state: SalesFlow): boolean {
@@ -237,6 +298,7 @@ export function buildLeadParams(state: SalesFlow, contactName: string | null): R
     title,
     category: cat?.id || null,
     subcategory: offer?.id || null,
+    name: state.collected.name ?? null,
     date: state.collected.date ?? null,
     guests: state.collected.guests ?? null,
     participants: state.collected.participants ?? null,
@@ -248,6 +310,7 @@ function summarizeState(state: SalesFlow): string {
   const cat = findCategory(state.categoryId)
   const offer = findOffer(state.categoryId, state.offerId)
   const parts: string[] = []
+  if (state.collected.name) parts.push(`İsim: ${state.collected.name}`)
   if (cat) parts.push(`Kategori: ${cat.label}`)
   if (offer) parts.push(`Hizmet: ${offer.label}`)
   if (state.collected.date) parts.push(`Tarih: ${state.collected.date}`)
@@ -310,6 +373,7 @@ All required details collected (${summarizeState(state)}). Confirm briefly in on
 
 function detailQuestion(field: DetailField): string {
   switch (field) {
+    case 'name': return 'Öncelikle size nasıl hitap edelim? Adınızı paylaşır mısınız?'
     case 'date': return 'Hangi tarih için düşünüyorsunuz?'
     case 'guests': return 'Toplam kaç kişi olacaksınız?'
     case 'participants': return 'Çekime/aktiviteye kaç kişi katılacak?'
