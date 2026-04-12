@@ -1,5 +1,11 @@
 @import "tailwindcss";
 
+/* Explicit content sources so Tailwind v4 always scans the whole app,
+   regardless of build CWD (standalone production builds occasionally
+   trip its auto-detection). */
+@source "../**/*.{ts,tsx,js,jsx,mdx}";
+@source "../../src/**/*.{ts,tsx,js,jsx,mdx}";
+
 @theme inline {
   /* ── Warm cream palette ── */
   --color-background: #faf8f5;
