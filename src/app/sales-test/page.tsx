@@ -42,6 +42,8 @@ export default function SalesTestPage() {
   const [turns, setTurns] = useState<Turn[]>([])
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState('')
+  const [committing, setCommitting] = useState(false)
+  const [commitResult, setCommitResult] = useState<any>(null)
 
   async function send() {
     if (!message.trim()) return
@@ -101,7 +103,37 @@ export default function SalesTestPage() {
     setTurns([])
     setMessage('Kapadokyada hizmetleriniz neler?')
     setErr('')
+    setCommitResult(null)
   }
+
+  async function commitLead() {
+    setCommitting(true)
+    setErr('')
+    setCommitResult(null)
+    try {
+      const r = await fetch('/api/sales/commit', {
+        method: 'POST',
+        credentials: 'same-origin',
+        cache: 'no-store',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ state, contactName: contactName || null }),
+      })
+      const raw = await r.text()
+      let body: any = null
+      try { body = JSON.parse(raw) } catch {}
+      if (!r.ok || !body?.success) {
+        setErr(`commit failed: HTTP ${r.status} ${body?.error || raw.slice(0, 200)}`)
+      } else {
+        setCommitResult(body.data)
+      }
+    } catch (e: any) {
+      setErr('commit network: ' + (e?.message || String(e)))
+    } finally {
+      setCommitting(false)
+    }
+  }
+
+  const leadReady = state.stage === 'lead_ready'
 
   return (
     <div style={{ maxWidth: 900, margin: '1.5rem auto', padding: '1rem', fontFamily: 'system-ui, sans-serif' }}>
@@ -159,6 +191,44 @@ export default function SalesTestPage() {
       {err && (
         <div style={{ marginTop: 10, padding: 8, background: '#fde7e9', border: '1px solid #f4b5bb', borderRadius: 6, color: '#7a0010', fontSize: 13 }}>
           {err}
+        </div>
+      )}
+
+      {leadReady && !commitResult && (
+        <div style={{ marginTop: 12, padding: 10, background: '#e8f5ed', border: '1px solid #b4d9bf', borderRadius: 6 }}>
+          <div style={{ color: '#177a2f', fontWeight: 600, marginBottom: 6 }}>✓ Lead ready — commit to DB?</div>
+          <button
+            onClick={commitLead}
+            disabled={committing}
+            style={{
+              padding: '8px 16px', fontSize: 14, border: 0, borderRadius: 6,
+              background: '#177a2f', color: '#fff',
+              cursor: committing ? 'wait' : 'pointer',
+            }}
+          >
+            {committing ? 'Committing…' : 'Commit Lead (run create_lead action)'}
+          </button>
+        </div>
+      )}
+
+      {commitResult && (
+        <div style={{ marginTop: 12, padding: 10, background: '#eef6ff', border: '1px solid #b8d4f5', borderRadius: 6 }}>
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>
+            Action status: <span style={{ color: commitResult.actionStatus === 'success' ? '#177a2f' : '#7a0010' }}>{commitResult.actionStatus}</span>
+          </div>
+          {commitResult.deal && (
+            <div style={{ fontSize: 13 }}>
+              <div>✓ Deal created · id: <code>{commitResult.deal.id}</code></div>
+              <div>title: {commitResult.deal.title}</div>
+              <div>stage: {commitResult.deal.stage?.name}</div>
+              <div>action_log id: <code>{commitResult.actionLogId}</code></div>
+              <div>conversation id: <code>{commitResult.conversationId}</code></div>
+              <div>contact id: <code>{commitResult.contactId}</code></div>
+            </div>
+          )}
+          <pre style={{ marginTop: 8, padding: 8, background: '#fff', border: '1px solid #eee', borderRadius: 4, fontSize: 11, whiteSpace: 'pre-wrap' }}>
+            {JSON.stringify(commitResult, null, 2)}
+          </pre>
         </div>
       )}
 
