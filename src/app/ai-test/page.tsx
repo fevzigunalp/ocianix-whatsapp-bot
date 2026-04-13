@@ -8,13 +8,13 @@ export default function AiTestPage() {
   const [message, setMessage] = useState('Merhaba, hizmetleriniz neler?')
   const [status, setStatus] = useState<Status>('idle')
   const [httpCode, setHttpCode] = useState<number | null>(null)
-  const [body, setBody] = useState<string>('')
+  const [bodyText, setBodyText] = useState<string>('')
   const [errorText, setErrorText] = useState<string>('')
 
   async function send() {
     setStatus('sending')
     setHttpCode(null)
-    setBody('')
+    setBodyText('')
     setErrorText('')
 
     let res: Response
@@ -22,12 +22,18 @@ export default function AiTestPage() {
       res = await fetch('/api/ai/test', {
         method: 'POST',
         credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        cache: 'no-store',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
         body: JSON.stringify({ message }),
       })
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
       setStatus('error')
-      setErrorText('NETWORK FAIL: ' + (err?.message || String(err)))
+      setErrorText('NETWORK FAIL: ' + msg)
+      setBodyText('(no body — network failed)')
       return
     }
 
@@ -36,40 +42,36 @@ export default function AiTestPage() {
     let raw = ''
     try {
       raw = await res.text()
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
       setStatus('error')
-      setErrorText('READ BODY FAIL: ' + (err?.message || String(err)))
+      setErrorText('READ BODY FAIL: ' + msg)
+      setBodyText('(no body — read failed)')
       return
     }
 
-    // Try to pretty-print JSON; if not JSON, show raw
-    let pretty = raw
-    try {
-      const parsed = JSON.parse(raw)
-      pretty = JSON.stringify(parsed, null, 2)
-    } catch {
-      // non-JSON — keep raw text
+    let display: string
+    if (raw === '') {
+      display = '(empty response body, http ' + res.status + ')'
+    } else {
+      try {
+        const parsed = JSON.parse(raw)
+        display = JSON.stringify(parsed, null, 2)
+        if (display === 'null' || display === undefined) {
+          display = '(server returned literal null — http ' + res.status + ')'
+        }
+      } catch {
+        display = raw
+      }
     }
-    setBody(pretty)
+    setBodyText(display)
 
-    if (res.status === 401) {
-      setStatus('error')
-      setErrorText('401 UNAUTHORIZED — you are not logged in as an admin. Sign in at /login first.')
-      return
-    }
-    if (res.status === 405) {
-      setStatus('error')
-      setErrorText('405 METHOD NOT ALLOWED — endpoint is not accepting POST.')
-      return
-    }
-    if (res.status >= 500) {
-      setStatus('error')
-      setErrorText(`SERVER ERROR ${res.status} — see body below.`)
-      return
-    }
     if (!res.ok) {
       setStatus('error')
-      setErrorText(`HTTP ${res.status} — see body below.`)
+      if (res.status === 401) setErrorText('401 UNAUTHORIZED — log in at /login first.')
+      else if (res.status === 405) setErrorText('405 METHOD NOT ALLOWED — endpoint not accepting POST.')
+      else if (res.status >= 500) setErrorText('SERVER ERROR ' + res.status + ' — see body below.')
+      else setErrorText('HTTP ' + res.status + ' — see body below.')
       return
     }
 
@@ -77,10 +79,10 @@ export default function AiTestPage() {
   }
 
   const statusColor =
-    status === 'idle'    ? '#666'
-    : status === 'sending' ? '#c48a00'
-    : status === 'success' ? '#177a2f'
-    : '#b00020'
+    status === 'idle'    ? '#666'    :
+    status === 'sending' ? '#c48a00' :
+    status === 'success' ? '#177a2f' :
+                           '#b00020'
 
   return (
     <div style={{ maxWidth: 760, margin: '2rem auto', padding: '1rem', fontFamily: 'system-ui, sans-serif' }}>
@@ -90,10 +92,15 @@ export default function AiTestPage() {
         value={message}
         onChange={e => setMessage(e.target.value)}
         rows={3}
-        style={{ width: '100%', padding: 8, fontSize: 14, border: '1px solid #ccc', borderRadius: 6, boxSizing: 'border-box' }}
+        placeholder="Type a test message…"
+        style={{
+          width: '100%', padding: 8, fontSize: 14,
+          border: '1px solid #ccc', borderRadius: 6,
+          boxSizing: 'border-box', fontFamily: 'inherit',
+        }}
       />
 
-      <div style={{ marginTop: 8, display: 'flex', gap: 12, alignItems: 'center' }}>
+      <div style={{ marginTop: 8, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
         <button
           onClick={send}
           disabled={status === 'sending' || !message.trim()}
@@ -108,13 +115,15 @@ export default function AiTestPage() {
         </button>
 
         <span style={{ fontSize: 14 }}>
-          status: <strong style={{ color: statusColor }}>{status}</strong>
+          status:{' '}
+          <strong style={{ color: statusColor }}>{status}</strong>
           {httpCode !== null && <> · http: <strong>{httpCode}</strong></>}
         </span>
       </div>
 
       {errorText && (
         <div
+          role="alert"
           style={{
             marginTop: 12, padding: 10,
             background: '#fde7e9', border: '1px solid #f4b5bb', borderRadius: 6,
@@ -134,7 +143,7 @@ export default function AiTestPage() {
           fontSize: 13, minHeight: 80, maxHeight: 500, overflow: 'auto',
         }}
       >
-        {body || '(no body yet — click Send)'}
+        {bodyText || '(no body yet — click Send)'}
       </pre>
     </div>
   )
