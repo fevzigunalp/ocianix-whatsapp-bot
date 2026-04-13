@@ -44,6 +44,9 @@ export default function SalesTestPage() {
   const [err, setErr] = useState('')
   const [committing, setCommitting] = useState(false)
   const [commitResult, setCommitResult] = useState<any>(null)
+  const [handoffResult, setHandoffResult] = useState<any>(null)
+  const [simResult, setSimResult] = useState<any>(null)
+  const [simMessage, setSimMessage] = useState('Bir daha soruyorum, fiyat ne?')
 
   async function send() {
     if (!message.trim()) return
@@ -130,6 +133,43 @@ export default function SalesTestPage() {
       setErr('commit network: ' + (e?.message || String(e)))
     } finally {
       setCommitting(false)
+    }
+  }
+
+  async function doHandoff() {
+    if (!commitResult?.conversationId) return
+    setErr('')
+    try {
+      const r = await fetch('/api/sales/handoff', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conversationId: commitResult.conversationId, reason: 'manual_takeover_from_ui' }),
+      })
+      const j = await r.json()
+      if (!r.ok || !j?.success) setErr('handoff: ' + (j?.error || r.status))
+      else setHandoffResult(j.data)
+    } catch (e: any) {
+      setErr('handoff network: ' + (e?.message || String(e)))
+    }
+  }
+
+  async function doSimulate() {
+    if (!commitResult?.conversationId || !simMessage.trim()) return
+    setErr('')
+    setSimResult(null)
+    try {
+      const r = await fetch('/api/sales/simulate', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conversationId: commitResult.conversationId, message: simMessage }),
+      })
+      const j = await r.json()
+      if (!r.ok || !j?.success) setErr('simulate: ' + (j?.error || r.status))
+      else setSimResult(j.data)
+    } catch (e: any) {
+      setErr('simulate network: ' + (e?.message || String(e)))
     }
   }
 
@@ -229,6 +269,82 @@ export default function SalesTestPage() {
           <pre style={{ marginTop: 8, padding: 8, background: '#fff', border: '1px solid #eee', borderRadius: 4, fontSize: 11, whiteSpace: 'pre-wrap' }}>
             {JSON.stringify(commitResult, null, 2)}
           </pre>
+
+          {/* Phase 6 — handoff + AI-blocked simulation */}
+          <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid #b8d4f5' }}>
+            <div style={{ fontWeight: 600, marginBottom: 8 }}>Phase 6 — Human Handoff Guard</div>
+
+            {!handoffResult && (
+              <button
+                onClick={doHandoff}
+                style={{
+                  padding: '6px 12px', fontSize: 13, border: 0, borderRadius: 6,
+                  background: '#c48a00', color: '#fff', cursor: 'pointer',
+                }}
+              >
+                Trigger manual handoff
+              </button>
+            )}
+
+            {handoffResult && (
+              <div style={{ padding: 8, background: '#fff4d9', border: '1px solid #ddc474', borderRadius: 4, fontSize: 12 }}>
+                ✓ Handoff fired. humanLocked: <strong>{handoffResult.humanLocked ? 'true' : 'false'}</strong>
+                {' · '}lockSignal: <code>{handoffResult.lockSignal}</code>
+              </div>
+            )}
+
+            {handoffResult && (
+              <div style={{ marginTop: 10 }}>
+                <div style={{ fontSize: 12, color: '#666', marginBottom: 4 }}>
+                  Send a simulated inbound message — AI responder must refuse (guard):
+                </div>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <input
+                    value={simMessage}
+                    onChange={e => setSimMessage(e.target.value)}
+                    style={{ flex: 1, padding: 6, fontSize: 13, border: '1px solid #ccc', borderRadius: 4 }}
+                  />
+                  <button
+                    onClick={doSimulate}
+                    disabled={!simMessage.trim()}
+                    style={{
+                      padding: '6px 12px', fontSize: 13, border: 0, borderRadius: 6,
+                      background: '#333', color: '#fff', cursor: 'pointer',
+                    }}
+                  >
+                    Simulate inbound
+                  </button>
+                </div>
+
+                {simResult && (
+                  <div
+                    style={{
+                      marginTop: 10, padding: 8,
+                      background: simResult.aiRan ? '#fde7e9' : '#e8f5ed',
+                      border: simResult.aiRan ? '1px solid #f4b5bb' : '1px solid #b4d9bf',
+                      borderRadius: 4, fontSize: 12,
+                    }}
+                  >
+                    {simResult.aiRan ? (
+                      <strong style={{ color: '#7a0010' }}>❌ FAIL — AI produced a reply despite human lock</strong>
+                    ) : (
+                      <strong style={{ color: '#177a2f' }}>✓ PASS — AI blocked, no outbound reply</strong>
+                    )}
+                    <div style={{ marginTop: 4 }}>
+                      humanLockedBefore: <code>{simResult.humanLockedBefore || 'null'}</code>
+                      {' · '}handlerType: <code>{simResult.conversationHandlerType}</code>
+                      {' · '}aiEnabled: <code>{String(simResult.conversationAiEnabled)}</code>
+                    </div>
+                    {simResult.aiReplyText && (
+                      <div style={{ marginTop: 4, color: '#7a0010' }}>
+                        AI reply captured: "{simResult.aiReplyText}"
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       )}
 

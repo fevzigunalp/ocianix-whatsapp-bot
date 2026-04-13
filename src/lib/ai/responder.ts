@@ -13,6 +13,7 @@ import { db } from '@/lib/db'
 import { redis, tenantKey } from '@/lib/redis'
 import { evolutionAPI } from '@/lib/evolution'
 import { publishSSE } from '@/lib/sse'
+import { performHandoff as sharedPerformHandoff, isHumanLocked } from './handoff'
 import { callAI, type AIResponse } from './provider'
 import {
   buildStructuredSystemPrompt,
@@ -59,6 +60,17 @@ export async function triggerAIResponse(input: TriggerInput): Promise<void> {
   const tag = `[AI:${input.conversationId.slice(0, 8)}]`
 
   try {
+    // 0. HARD HUMAN-LOCK GUARD (Phase 6)
+    // Strictest first check. If this conversation has been handed off to
+    // a human, the responder MUST NOT touch it — no lock acquisition, no
+    // debounce, no context load, no AI call. Also guards against anyone
+    // re-flipping aiEnabled/handlerType between webhook receipt and here.
+    const lockReason = await isHumanLocked(input.conversationId)
+    if (lockReason) {
+      console.log(tag, `HUMAN-LOCKED, AI aborted: ${lockReason}`)
+      return
+    }
+
     // 1. Check eligibility
     const eligible = await shouldRespond(input)
     if (!eligible.ok) {
@@ -502,53 +514,17 @@ async function loadContext(input: TriggerInput) {
 }
 
 /**
- * Central handoff primitive. Single-source-of-truth for "escalate this
- * conversation to a human." Updates the conversation row, stamps the
- * reason into metadata.handoff, and emits an SSE notification so agent
- * UIs can surface the escalation without polling.
- *
- * Idempotent: already-handed-off conversations are only updated once
- * per trigger; the SSE notification still fires so late-joining clients
- * pick it up.
+ * Local shim that delegates to the shared handoff helper so every
+ * escalation path in this file funnels through one primitive.
+ * See src/lib/ai/handoff.ts for the authoritative implementation.
  */
-async function performHandoff(
+function performHandoff(
   tenantId: string,
   conversationId: string,
   reason: string,
   tag: string,
 ): Promise<void> {
-  console.log(tag, `HANDOFF: ${reason}`)
-  const at = new Date().toISOString()
-  try {
-    const existing = await db.conversation.findUnique({
-      where: { id: conversationId },
-      select: { metadata: true, handlerType: true, aiEnabled: true },
-    })
-    const mergedMeta = {
-      ...(((existing?.metadata as Record<string, any>) || {})),
-      handoff: { reason, at },
-    }
-    await db.conversation.update({
-      where: { id: conversationId },
-      data: {
-        handlerType: 'human',
-        aiEnabled: false,
-        assignedTo: null,
-        metadata: mergedMeta as any,
-      },
-    })
-  } catch (err: any) {
-    console.error(tag, 'Handoff DB update failed:', err.message)
-  }
-  try {
-    await publishSSE({
-      type: 'notification',
-      tenantId,
-      data: { kind: 'handoff', conversationId, reason, at },
-    })
-  } catch (err: any) {
-    console.error(tag, 'Handoff SSE failed:', err.message)
-  }
+  return sharedPerformHandoff(tenantId, conversationId, reason, { by: 'system' }, tag)
 }
 
 /**
