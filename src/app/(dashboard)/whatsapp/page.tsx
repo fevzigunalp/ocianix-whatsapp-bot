@@ -22,6 +22,7 @@ export default function WhatsAppPage() {
   const [newName, setNewName] = useState('')
   const [creating, setCreating] = useState(false)
   const [qrData, setQrData] = useState<string | null>(null)
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
   useEffect(() => {
     loadInstances()
@@ -37,6 +38,7 @@ export default function WhatsAppPage() {
   async function createInstance() {
     if (!newName.trim()) return
     setCreating(true)
+    setErrorMsg(null)
     try {
       const data = await apiFetch<{ instance: Instance; qrcode?: any }>('/api/whatsapp', {
         method: 'POST',
@@ -48,7 +50,16 @@ export default function WhatsAppPage() {
       setShowAdd(false)
       setNewName('')
       loadInstances()
-    } finally { setCreating(false) }
+    } catch (err: any) {
+      const msg = err?.message || String(err)
+      setErrorMsg(
+        /ECONNREFUSED|fetch failed|Evolution/i.test(msg)
+          ? `Evolution API bağlantısı kurulamadı. Server tarafında Evolution API kurulu değil veya EVOLUTION_API_URL yanlış. Detay: ${msg}`
+          : `Instance oluşturulamadı: ${msg}`
+      )
+    } finally {
+      setCreating(false)
+    }
   }
 
   const statusConfig: Record<string, { icon: React.ReactNode; color: string; label: string }> = {
@@ -70,14 +81,21 @@ export default function WhatsAppPage() {
       </div>
 
       {showAdd && (
-        <div className="bg-card border border-primary/20 rounded-xl p-5 flex gap-3 items-end">
-          <div className="flex-1">
-            <label className="block text-xs font-medium text-muted-foreground mb-1">Instance Name</label>
-            <input value={newName} onChange={e => setNewName(e.target.value)} placeholder="my-business" className="w-full h-9 px-3 bg-muted/50 border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring" />
+        <div className="bg-card border border-primary/20 rounded-xl p-5 space-y-3">
+          <div className="flex gap-3 items-end">
+            <div className="flex-1">
+              <label className="block text-xs font-medium text-muted-foreground mb-1">Instance Name</label>
+              <input value={newName} onChange={e => setNewName(e.target.value)} placeholder="my-business" className="w-full h-9 px-3 bg-muted/50 border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring" />
+            </div>
+            <button onClick={createInstance} disabled={creating} className="h-9 px-4 bg-primary text-white rounded-lg text-sm font-medium disabled:opacity-50">
+              {creating ? 'Creating...' : 'Create & Connect'}
+            </button>
           </div>
-          <button onClick={createInstance} disabled={creating} className="h-9 px-4 bg-primary text-white rounded-lg text-sm font-medium disabled:opacity-50">
-            {creating ? 'Creating...' : 'Create & Connect'}
-          </button>
+          {errorMsg && (
+            <div className="text-xs p-2 rounded-lg border border-destructive/30 bg-destructive/10 text-destructive">
+              {errorMsg}
+            </div>
+          )}
         </div>
       )}
 
