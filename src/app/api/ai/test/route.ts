@@ -3,53 +3,43 @@
  *
  * Minimal brain-check endpoint. Calls the Anthropic provider directly —
  * no RAG, no policy engine, no sales state. If ANTHROPIC_API_KEY is
- * missing, returns a mock response so the endpoint is never unreachable.
+ * missing or the call fails, returns a mock response so the endpoint
+ * is never unreachable.
  *
- * Auth-gated (admin session) so it cannot be abused publicly.
+ * Uses the same `withAuth` wrapper every other dashboard API route uses,
+ * so an authenticated dashboard session is accepted identically.
  */
 
-import { auth } from '@/lib/auth'
+import { withAuth, apiSuccess, apiError, parseBody } from '@/lib/api/middleware'
 import { callAI } from '@/lib/ai/provider'
-import { NextRequest, NextResponse } from 'next/server'
 
 const SYSTEM_PROMPT = `You are a friendly WhatsApp sales assistant.
 Reply in Turkish unless the user writes in another language.
 Keep answers short (1-3 sentences). Be warm and helpful.`
 
-export async function POST(req: NextRequest) {
+export const POST = withAuth(async (req) => {
   const started = Date.now()
 
-  const session = await auth()
-  if (!session?.user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const body = await parseBody<{ message: string }>(req)
+  if (!body?.message || typeof body.message !== 'string' || !body.message.trim()) {
+    return apiError('message required')
   }
 
-  let message: string
-  try {
-    ;({ message } = await req.json())
-  } catch {
-    return NextResponse.json({ error: 'invalid json body' }, { status: 400 })
-  }
-  if (!message || typeof message !== 'string' || !message.trim()) {
-    return NextResponse.json({ error: 'message required' }, { status: 400 })
-  }
-
-  const ai = await callAI(SYSTEM_PROMPT, [{ role: 'user', content: message }])
+  const ai = await callAI(SYSTEM_PROMPT, [
+    { role: 'user', content: body.message },
+  ])
 
   const responseText =
     ai?.text?.trim() ||
     'Merhaba! Test yanitiyim. Gerçek AI şu anda cevap vermedi, ama boru hattı çalışıyor.'
 
-  return NextResponse.json({
-    success: true,
-    data: {
-      decision: 'answer',
-      confidence: ai ? 80 : 50,
-      intent: 'TEST',
-      response: responseText,
-      actionName: null,
-      sourcesUsed: [],
-      latencyMs: ai?.latencyMs ?? Date.now() - started,
-    },
+  return apiSuccess({
+    decision: 'answer',
+    confidence: ai ? 80 : 50,
+    intent: 'TEST',
+    response: responseText,
+    actionName: null,
+    sourcesUsed: [],
+    latencyMs: ai?.latencyMs ?? Date.now() - started,
   })
-}
+})
